@@ -1,6 +1,6 @@
 """NitroSense for Linux - Acer Nitro control center (fan, lighting, power, monitoring)."""
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 APP_ID = "io.github.napejoon.NitroSense"
 
