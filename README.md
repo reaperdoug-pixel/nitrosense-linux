@@ -1,5 +1,7 @@
 # NitroSense for Linux
 
+<!-- A versão em inglês fica em docs/README.en.md: mantenha as duas em sincronia (mesmas seções, tabelas e blocos de código). -->
+
 **Painel de monitoramento e controle para notebooks Acer Nitro no Linux: ventoinhas com curva
 automática, saúde do SSD e da bateria, histórico, consumo em watts, detecção de limitação por
 calor (*throttling*), alertas e mais.**
@@ -548,7 +550,7 @@ journalctl -u nitrosensed -f        # mostra cada chamada WMI com entrada e saí
 sudo ./uninstall.sh
 ```
 
-Isso devolve as ventoinhas ao **Automático**, restaura a política de CPU Equilibrada e remove o
+Isso devolve as ventoinhas ao **Automático**, restaura a política de CPU do plano Equilibrado e remove o
 serviço, o programa, o vigia de alertas, a configuração, o histórico e o estado salvo. O
 `acpi-call-dkms` continua instalado; remova-o com `sudo apt remove acpi-call-dkms` se nada mais o
 usar.

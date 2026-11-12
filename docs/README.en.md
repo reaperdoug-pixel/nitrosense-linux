@@ -2,6 +2,8 @@
 
 > The main README is in Portuguese: [README.md](../README.md). This is its English version.
 
+<!-- Keep in sync with ../README.md: same sections, tables and code blocks. The Portuguese file is the reference. -->
+
 **A monitoring and control dashboard for Acer Nitro laptops on Linux: fan control with an
 automatic curve, SSD and battery health, history, power, throttling detection, alerts and
 more.**
@@ -163,8 +165,9 @@ clock (for example "CPU 3,3 de 4,6 GHz") and the temperature where the processor
 protecting itself. A banner on top shows the most serious [alert](#alerts).
 
 ### Cenário (Scenario)
-- **Power plan**: separate plans for AC and battery (Power Saver, Balance, High-Performance),
-  switched automatically when you plug or unplug the charger.
+- **Power plan**: separate plans for AC and battery, shown as *Silencioso* (Power Saver),
+  *Equilibrado* (Balance) and *Desempenho* (High-Performance), switched automatically when you
+  plug or unplug the charger.
 - **Fan control**: **Auto** (the firmware decides), **Max**, **Custom** (CPU and GPU sliders,
   0–100 % in 10 % steps, each with its own Auto switch), **Curve** and **CoolBoost** (higher
   maximum speed in Auto mode only).
@@ -321,9 +324,9 @@ Windows switches Windows power schemes. Linux has none, so each plan maps to:
 
 | Plan | CPU governor | CPU boost | power-profiles-daemon |
 |---|---|---|---|
-| Power Saver | `schedutil` | off | `power-saver` |
-| Balance | `schedutil` | on | `balanced` |
-| High-Performance | `performance` | on | `performance` (or `balanced` if your system has no performance profile) |
+| Silencioso (Power Saver) | `schedutil` | off | `power-saver` |
+| Equilibrado (Balance) | `schedutil` | on | `balanced` |
+| Desempenho (High-Performance) | `performance` | on | `performance` (or `balanced` if your system has no performance profile) |
 
 ---
 
@@ -512,7 +515,7 @@ AMD machines are untested. GPU power appears only while the GPU is awake.
 **The battery-limit switch is missing**: the firmware did not report the interface. Run
 `sudo python3 -I tools/probe_battery.py` to see what it answers.
 
-**High-Performance seems no different from Balance**: on some CPUs power-profiles-daemon has no
+**Desempenho (High-Performance) seems no different from Equilibrado (Balance)**: on some CPUs power-profiles-daemon has no
 *performance* profile. The governor is still switched; check with
 `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor`.
 
@@ -541,7 +544,7 @@ journalctl -u nitrosensed -f        # shows every WMI call with its input/output
 sudo ./uninstall.sh
 ```
 
-This puts the fans back on **Auto**, restores the Balance CPU policy, and removes the service, the
+This puts the fans back on **Auto**, restores the Balance (*Equilibrado*) CPU policy, and removes the service, the
 program, the alert watcher, the configuration, the history and the saved state. `acpi-call-dkms`
 stays installed; remove it with `sudo apt remove acpi-call-dkms` if nothing else uses it.
 
