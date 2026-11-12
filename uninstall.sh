@@ -34,6 +34,8 @@ if [ -f /etc/udev/hwdb.d/61-nitrosense.hwdb ]; then
     systemd-hwdb update
     udevadm trigger --sysname-match="event*" || true
 fi
+pkill -f /opt/nitrosense/bin/nitrosense-watch 2>/dev/null || true
+rm -f /etc/xdg/autostart/nitrosense-watch.desktop
 rm -f /etc/systemd/system/nitrosensed.service /etc/modules-load.d/nitrosense.conf
 rm -f /usr/share/applications/nitrosense.desktop /usr/local/bin/nitrosense
 rm -f /usr/share/applications/io.github.napejoon.NitroSense.desktop

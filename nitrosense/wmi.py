@@ -23,6 +23,7 @@ OVERRIDE_FILE = "/etc/nitrosense/wmi.json"
 
 GAMING_GUID = "7A4DDFE7-5B5D-40B4-8595-4408E0CC7F56"  # class AcerGamingFunction
 APGE_GUID = "61EF69EA-865C-4BC3-A502-A0DEBA0CB531"    # class APGeAction
+BATTERY_GUID = "79772EC5-04B1-4BFD-843C-61E7F77B6CC9"  # battery health control (acer-wmi-battery)
 
 # name -> (guid, WmiMethodId, input size in bytes)
 # Verified against the AN515-44 BIOS V1.04 (SSDT5 \_SB.PCI0.WMID.WMBH):
@@ -47,6 +48,10 @@ METHODS: dict[str, tuple[str, int, int]] = {
     "GetGamingKBBacklight": (GAMING_GUID, 21, 4),    # -> [status, mode, speed, bright, cs, dir, R, G, B]
     "SetGamingMiscSetting": (GAMING_GUID, 22, 8),
     "GetGamingMiscSetting": (GAMING_GUID, 23, 4),
+    # Battery health mode = charge limit at ~80 %. Layout from the acer-wmi-battery driver; the
+    # get call is confirmed on a Nitro ANV15-51 (answers 03 00 00 00 ...: health + calibration).
+    "GetBatteryHealth": (BATTERY_GUID, 20, 4),   # in: battery 1, query 1; out[0] functions, out[3] health
+    "SetBatteryHealth": (BATTERY_GUID, 21, 8),   # in: battery 1, function mask, status
     "SetFunction": (APGE_GUID, 1, 8),
     "GetFunction": (APGE_GUID, 2, 4),
 }

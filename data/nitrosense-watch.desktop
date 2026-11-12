@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=NitroSense alerts
+Comment=Desktop notifications for high temperatures, stopped fans and SSD health
+Exec=/opt/nitrosense/bin/nitrosense-watch
+Icon=io.github.napejoon.NitroSense
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

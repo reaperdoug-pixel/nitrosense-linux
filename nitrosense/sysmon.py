@@ -54,6 +54,19 @@ class _NvmlUtil(ctypes.Structure):
     _fields_ = [("gpu", ctypes.c_uint), ("memory", ctypes.c_uint)]
 
 
+# NVML clocks-event-reason bits (nvml.h)
+_GPU_POWER = 0x4 | 0x80         # software power cap, hardware power brake
+_GPU_THERMAL = 0x20 | 0x40      # software / hardware thermal slowdown
+_GPU_HW_SLOWDOWN = 0x8
+
+
+def gpu_throttle(mask: int | None) -> dict:
+    """Which kind of slowdown a clocks-event-reason bitmask reports."""
+    m = mask or 0
+    return {"thermal": bool(m & _GPU_THERMAL), "power": bool(m & _GPU_POWER),
+            "hw": bool(m & _GPU_HW_SLOWDOWN)}
+
+
 class GpuMonitor:
     """Reports (load %, temperature) for the NVIDIA dGPU, or idle=True."""
 
@@ -62,6 +75,10 @@ class GpuMonitor:
         self._nvml = None
         self._handle = None
         self.name = ""
+        self.power: float | None = None  # watts, from the latest sample() (None while asleep)
+        self.clock: int | None = None        # graphics clock in MHz
+        self.clock_max: int | None = None
+        self.reasons: int | None = None      # clocks-event-reason bitmask (see gpu_throttle)
 
     @property
     def present(self) -> bool:
@@ -117,7 +134,8 @@ class GpuMonitor:
         self._nvml = self._handle = None
 
     def sample(self) -> tuple[bool, float | None, int | None]:
-        """-> (idle, load %, temp C)."""
+        """-> (idle, load %, temp C); the power draw in watts is left in self.power."""
+        self.power = self.clock = self.clock_max = self.reasons = None
         if not self.present:
             return True, None, None
         if not self.awake():
@@ -133,6 +151,20 @@ class GpuMonitor:
             load = float(util.gpu)
         if self._nvml.nvmlDeviceGetTemperature(self._handle, 0, ctypes.byref(temp)) == 0:
             t = int(temp.value)
+        milliwatts = ctypes.c_uint()
+        if self._nvml.nvmlDeviceGetPowerUsage(self._handle, ctypes.byref(milliwatts)) == 0:
+            self.power = milliwatts.value / 1000
+        mhz = ctypes.c_uint()
+        if self._nvml.nvmlDeviceGetClockInfo(self._handle, 0, ctypes.byref(mhz)) == 0:
+            self.clock = mhz.value
+        if self._nvml.nvmlDeviceGetMaxClockInfo(self._handle, 0, ctypes.byref(mhz)) == 0:
+            self.clock_max = mhz.value
+        reasons = ctypes.c_ulonglong()
+        for name in ("nvmlDeviceGetCurrentClocksEventReasons", "nvmlDeviceGetCurrentClocksThrottleReasons"):
+            fn = getattr(self._nvml, name, None)  # the function was renamed in recent drivers
+            if fn is not None and fn(self._handle, ctypes.byref(reasons)) == 0:
+                self.reasons = reasons.value
+                break
         if self.runtime_d3_enabled():
             # do not keep /dev/nvidia* open, or the GPU could never suspend
             self._shutdown_nvml()

@@ -1,0 +1,14 @@
+#!/usr/bin/python3 -I
+"""NitroSense for Linux - background alert watcher (desktop notifications)."""
+import os
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+for base in (os.path.dirname(HERE), "/opt/nitrosense"):
+    if os.path.isdir(os.path.join(base, "nitrosense")):
+        sys.path.insert(0, base)
+        break
+
+from nitrosense.watcher import main  # noqa: E402
+
+sys.exit(main())

@@ -124,7 +124,8 @@ class TitleButton(Canvas):
 
     def draw(self, cr) -> None:
         color = theme.RED if self.pressed else "#CCCCCC" if self.hover else theme.TITLE_ICON
-        self.assets.draw(cr, self.key, self.offset[0], self.offset[1], color=color)
+        if not self.assets.draw(cr, self.key, self.offset[0], self.offset[1], color=color):
+            theme.draw_fallback_icon(cr, self.key, self.w, self.h, color)
 
 
 class ModeButton(Canvas):
@@ -147,11 +148,21 @@ class ModeButton(Canvas):
         elif self.hover and self.enabled:
             color = theme.ICON_HOVER
         else:
-            color = theme.ICON_NORMAL
+            color = theme.ICON_NORMAL if self.assets.available else theme.TEXT_INACTIVE
         alpha = 1.0 if self.enabled else 0.4
         paths = self.assets.paths(self.key)
         ih = float(paths[0].get("Height", 28)) if paths else 28
-        self.assets.draw(cr, self.key, self.icon_x, (56 - ih) / 2, color=color, alpha=alpha)
+        if not self.assets.draw(cr, self.key, self.icon_x, (56 - ih) / 2, color=color,
+                                alpha=alpha):
+            # no artwork: a simple radio-style indicator instead of the original icon
+            cx, cy = self.icon_x + 14, 28
+            cr.set_source_rgba(*rgba(color, alpha))
+            cr.set_line_width(1.5)
+            cr.arc(cx, cy, 8, 0, 6.2832)
+            cr.stroke()
+            if self.checked:
+                cr.arc(cx, cy, 4, 0, 6.2832)
+                cr.fill()
         r, g, b, _a = rgba(color)
         cr.push_group()
         draw_text(cr, self.text, self.text_x, 0, 15, color, valign_h=56)
@@ -514,6 +525,16 @@ class LineChart(Gtk.DrawingArea):
         if self._bg is None:
             cr.set_source_rgba(*rgba("#141414"))
             cr.paint()
+            cr.set_line_width(1)
+            for frac in (0.25, 0.5, 0.75):
+                y = round(100 * frac) + 0.5
+                cr.set_source_rgba(1, 1, 1, 0.07)
+                cr.move_to(0, y)
+                cr.line_to(720, y)
+                cr.stroke()
+            cr.set_source_rgba(*rgba(theme.CARD_BORDER))
+            cr.rectangle(0.5, 0.5, 719, 99)
+            cr.stroke()
         self._series(cr, self.load, theme.ORANGE)
         self._series(cr, self.temp, theme.RED)
         draw_text(cr, self.title, 10, 10, 16, theme.WHITE)

@@ -89,6 +89,66 @@ class DaemonTests(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertEqual(self.d.state["power"]["ac"], "performance")
 
+    def test_disks_command_is_cached_and_survives_errors(self):
+        calls = []
+        real = dmod.disks.read_smart
+        self.d._smart_cache = (-1e9, {})  # make_daemon() pre-fills it with fake data
+        try:
+            dmod.disks.read_smart = lambda: calls.append(1) or {"nvme0": {"percentage_used": 3}}
+            r = self.d.handle({"cmd": "disks"})
+            self.assertTrue(r["ok"])
+            self.assertEqual(r["smart"]["nvme0"]["percentage_used"], 3)
+            self.d.handle({"cmd": "disks"})
+            self.assertEqual(len(calls), 1)  # second call served from the cache
+            self.d._smart_cache = (-1e9, {})
+
+            def boom():
+                raise OSError("no device")
+            dmod.disks.read_smart = boom
+            r = self.d.handle({"cmd": "disks"})
+            self.assertEqual((r["ok"], r["smart"]), (True, {}))
+        finally:
+            dmod.disks.read_smart = real
+
+    def test_battery_limit(self):
+        self.assertIs(self.d.hw_battery_limit, False)  # supported, currently off
+        self.d.handle({"cmd": "set_battery_limit", "on": True})
+        self.assertIs(self.wmi.battery_limit, True)
+        self.assertIs(self.d.handle({"cmd": "status"})["hw"]["battery_limit"], True)
+        self.assertEqual(self.d.state["battery_limit"], True)
+        d2 = make_daemon(dmod.STATE_DIR)
+        d2.reapply("test")  # persisted setting is restored after a reboot
+        self.assertIs(d2.ctl.wmi.battery_limit, True)
+
+    def test_battery_limit_rejected_by_firmware_or_unsupported(self):
+        self.wmi.reject_battery_limit = True
+        with self.assertRaises(Exception):
+            self.d.handle({"cmd": "set_battery_limit", "on": True})
+        self.assertIsNone(self.d.state["battery_limit"])  # nothing persisted
+        self.d.hw_battery_limit = None
+        with self.assertRaises(dmod.ValidationError):
+            self.d.handle({"cmd": "set_battery_limit", "on": True})
+
+    def test_gpu_holders_command_is_cached_and_survives_errors(self):
+        calls = []
+        real = dmod.procs.nvidia_holders
+        self.d._holders_cache = (-1e9, [])
+        try:
+            dmod.procs.nvidia_holders = lambda: calls.append(1) or [{"pid": 7, "name": "webapps",
+                                                                       "devices": ["/dev/nvidia0"]}]
+            r = self.d.handle({"cmd": "gpu_holders"})
+            self.assertEqual(r["holders"][0]["name"], "webapps")
+            self.d.handle({"cmd": "gpu_holders"})
+            self.assertEqual(len(calls), 1)  # served from the cache the second time
+            self.d._holders_cache = (-1e9, [])
+
+            def boom():
+                raise OSError("proc vanished")
+            dmod.procs.nvidia_holders = boom
+            self.assertEqual(self.d.handle({"cmd": "gpu_holders"}), {"ok": True, "holders": []})
+        finally:
+            dmod.procs.nvidia_holders = real
+
     def test_unknown_and_bad_types(self):
         self.assertFalse(self.d.handle({"cmd": "rm -rf"})["ok"])
         with self.assertRaises(dmod.ValidationError):

@@ -21,13 +21,21 @@ import sys
 import threading
 import time
 
+from . import battery
+from . import disks
+from . import fancurve
+from . import history
 from . import encoders as enc
 from . import model as model_cfg
 from . import set_process_name
 from . import power
+from . import procs
+from . import throttle
+from .rapl import Rapl
+from .sysmon import CpuLoad, GpuMonitor
 from .controller import Controller, wait_for_acpi_call
 from .protocol import (ALLOWED_USERS_FILE, MAX_REQUEST, SOCKET_DIR, SOCKET_PATH,
-                       STATE_DIR, STATE_FILE, default_state)
+                       HISTORY_DIR, STATE_DIR, STATE_FILE, default_state)
 from .wmi import WmiError
 
 log = logging.getLogger("nitrosense.daemon")
@@ -91,12 +99,26 @@ class Daemon:
         self.ready = False
         self.error = ""
         self._sensor_cache: tuple[float, dict] = (0.0, {})
+        self._smart_cache: tuple[float, dict] = (-1e9, {})
+        self._holders_cache: tuple[float, list] = (-1e9, [])
+        self.recorder: history.Recorder | None = None
+        self._stop = threading.Event()
+        self._cpu_load = None
+        self._gpu_mon = None
+        self._rapl = Rapl()      # live readings (the window polls every second)
+        self._rapl_rec = Rapl()  # its own baseline: the history gets the average over each interval
+        self._rapl_thr = Rapl()  # and one more for the throttling monitor
+        self.throttle = throttle.CpuThrottle()
+        self.curve = fancurve.FanCurve()
+        self.fan_lock = threading.RLock()  # serialises fan commands and the curve thread
+        self._gpu_probe = GpuMonitor()     # only to know whether the dGPU is awake
         self._ac = power.ac_online()
         self.gpu_mode_supported = False
         self.gpu_mode = 0
         self.hw_lcd_overdrive = None
         self.hw_coolboost = None
         self.hw_backlight_timeout = None
+        self.hw_battery_limit = None  # None = not supported
 
     @property
     def overdrive_supported(self) -> bool:
@@ -104,6 +126,10 @@ class Daemon:
         # On the AN515-44 panel the setting is accepted but never takes effect, so it is
         # offered only when the firmware reports Overdrive as active.
         return self.hw_lcd_overdrive is True
+
+    @property
+    def battery_limit_supported(self) -> bool:
+        return self.hw_battery_limit is not None
 
     @property
     def backlight_timeout_supported(self) -> bool:
@@ -152,6 +178,7 @@ class Daemon:
                 self.gpu_mode = self.ctl.get_gpu_mode()
             self.hw_lcd_overdrive = self.ctl.get_lcd_overdrive()
             self.hw_coolboost = self.ctl.get_coolboost()
+            self.hw_battery_limit = self.ctl.get_battery_limit()
             bl = self.ctl.get_backlight()
             self.hw_backlight_timeout = bl[1] if bl else None
         self.reapply("startup")
@@ -163,13 +190,15 @@ class Daemon:
             st = copy.deepcopy(self.state)
         if self.ready:
             steps = [
-                ("fan", lambda: self.ctl.set_fan_mode(**st["fan"])),
+                ("fan", lambda: self._reapply_fan(st)),
                 ("coolboost", lambda: st["coolboost"] is not None and st["fan"]["mode"] == "auto"
                  and self.ctl.set_coolboost(st["coolboost"])),
                 ("keyboard", lambda: st["keyboard_applied"] and self.ctl.apply_keyboard(st["keyboard"])),
                 ("lcd_overdrive", lambda: st["lcd_overdrive"] is not None
                  and self.overdrive_supported and self.ctl.set_lcd_overdrive(st["lcd_overdrive"])),
                 ("win_key", lambda: st["win_key"] is not None and self.ctl.set_win_key(st["win_key"])),
+                ("battery_limit", lambda: st["battery_limit"] is not None
+                 and self.battery_limit_supported and self.ctl.set_battery_limit(st["battery_limit"])),
                 ("backlight_timeout", lambda: st["backlight_timeout"] is not None
                  and self.backlight_timeout_supported
                  and self.ctl.set_backlight_timeout(st["backlight_timeout"])),
@@ -181,6 +210,61 @@ class Daemon:
                     log.warning("re-apply %s failed: %s", name, e)
         if st["power_applied"]:
             self.apply_power(force=True)
+
+    def _reapply_fan(self, st: dict) -> None:
+        if st["fan"]["mode"] == "curve":
+            self.curve.reset()          # the curve thread sets the speed on its next step
+            self.fan_curve_step(0.0)
+        else:
+            self.ctl.set_fan_mode(**st["fan"])
+
+    # ------------------------------------------------------- fan curve
+    def start_fan_curve(self, interval: float = 2.0) -> None:
+        def loop() -> None:
+            while not self._stop.wait(interval):
+                try:
+                    self.fan_curve_step(interval)
+                except Exception as e:  # never let the curve thread die silently
+                    log.warning("fan curve step failed: %s", e)
+        threading.Thread(target=loop, name="fancurve", daemon=True).start()
+
+    def fan_curve_step(self, dt: float) -> None:
+        with self.fan_lock:
+            with self.lock:
+                mode = self.state["fan"]["mode"]
+                points = [list(p) for p in self.state["fan_curve"]["points"]]
+            if mode != "curve":
+                if self.curve.applied is not None or self.curve.failsafe:
+                    self.curve.reset()
+                return
+            if not self.ready:
+                return
+            s = self.sensors()
+            gpu = s["gpu_temp"] if self._gpu_probe.awake() else None  # asleep: value is not real
+            decision = self.curve.step(points, s["cpu_temp"], gpu, dt)
+            try:
+                if decision.release:
+                    log.warning("no temperature readings: fans back to automatic")
+                    self.ctl.set_fan_mode("auto")
+                elif decision.percent is not None:
+                    pct = decision.percent
+                    if decision.enter:
+                        self.ctl.set_fan_mode("custom", False, False, pct, pct)
+                    else:
+                        self.ctl.set_fan_speed("cpu", pct)
+                        self.ctl.set_fan_speed("gpu", pct)
+            except WmiError as e:
+                log.warning("fan curve could not set the fans: %s", e)
+                self.curve.reset()  # try again from scratch next time
+
+    def release_fans(self) -> None:
+        """On shutdown give the fans back to the firmware (a custom speed would stay otherwise)."""
+        with self.fan_lock:
+            if self.ready and self.state["fan"]["mode"] == "curve" and self.curve.applied is not None:
+                try:
+                    self.ctl.set_fan_mode("auto")
+                except WmiError as e:
+                    log.warning("could not release the fans: %s", e)
 
     def apply_power(self, force: bool = False) -> None:
         ac = power.ac_online()
@@ -199,7 +283,8 @@ class Daemon:
         ts, cached = self._sensor_cache
         if now - ts < 0.7:
             return cached
-        data = {"cpu_temp": None, "gpu_temp": None, "cpu_fan": None, "gpu_fan": None}
+        data = {"cpu_temp": None, "gpu_temp": None, "cpu_fan": None, "gpu_fan": None,
+                "cpu_power": None, "igpu_power": None, "sys_power": None}
         if self.ready:
             data["cpu_temp"] = self.ctl.read_sensor(enc.SENSOR_CPU_TEMP)
             data["gpu_temp"] = self.ctl.read_sensor(enc.SENSOR_GPU_TEMP)
@@ -207,8 +292,95 @@ class Daemon:
             data["gpu_fan"] = self.ctl.read_sensor(enc.SENSOR_GPU_FAN)
         if not data["cpu_temp"]:
             data["cpu_temp"] = _hwmon_temp(("k10temp", "coretemp", "zenpower"))
+        watts = self._rapl.sample()
+        data["cpu_power"], data["igpu_power"], data["sys_power"] = (
+            watts.get("cpu"), watts.get("igpu"), watts.get("sys"))
         self._sensor_cache = (now, data)
         return data
+
+    def smart(self) -> dict:
+        """NVMe SMART data (needs root, so only the service can read it); cached for 10 s."""
+        now = time.monotonic()
+        ts, cached = self._smart_cache
+        if now - ts < 10:
+            return cached
+        try:
+            data = disks.read_smart()
+        except Exception as e:  # never let a disk problem break the hardware service
+            log.warning("disk SMART read failed: %s", e)
+            data = {}
+        self._smart_cache = (now, data)
+        return data
+
+    def holders(self) -> list:
+        """Programs holding /dev/nvidia* open (root sees every user's); cached for 3 s."""
+        now = time.monotonic()
+        ts, cached = self._holders_cache
+        if now - ts < 3:
+            return cached
+        try:
+            data = procs.nvidia_holders()
+        except Exception as e:  # a weird /proc entry must not break the service
+            log.warning("gpu holders scan failed: %s", e)
+            data = []
+        self._holders_cache = (now, data)
+        return data
+
+    # ------------------------------------------------------- throttling
+    def start_throttle_monitor(self, interval: float = 2.0) -> None:
+        """Watch for CPU throttling every couple of seconds (short events would be missed by
+        the 30 s history samples, so those get the share of time spent throttled instead)."""
+        def loop() -> None:
+            while not self._stop.wait(interval):
+                try:
+                    self.throttle.update(self._rapl_thr.sample().get("cpu"))
+                except Exception as e:
+                    log.warning("throttle sample failed: %s", e)
+        threading.Thread(target=loop, name="throttle", daemon=True).start()
+
+    # ---------------------------------------------------------- history
+    def start_recorder(self, directory: str = HISTORY_DIR, interval: int = history.INTERVAL) -> None:
+        """Sample sensors in the background so the history has no gaps while the GUI is closed."""
+        self.recorder = history.Recorder(directory, interval)
+        self._cpu_load = CpuLoad()
+        self._gpu_mon = GpuMonitor()
+        threading.Thread(target=self._record_loop, name="history", daemon=True).start()
+
+    def _record_loop(self) -> None:
+        last_prune = 0.0
+        self._stop.wait(5)
+        while not self._stop.is_set():
+            try:
+                self.record_sample()
+                if time.time() - last_prune > 6 * 3600:
+                    last_prune = time.time()
+                    self.recorder.prune()
+            except Exception as e:  # a full disk or odd sensor must never stop the service
+                log.warning("history sample failed: %s", e)
+            self._stop.wait(self.recorder.interval)
+
+    def record_sample(self) -> None:
+        s = self.sensors()
+        gpu, gpu_watts = s["gpu_temp"], None
+        if self._gpu_mon is not None and self._gpu_mon.present:
+            if not self._gpu_mon.awake():
+                gpu = None  # dGPU powered down: the firmware value is not a real reading
+            else:
+                self._gpu_mon.sample()  # also refreshes .power (NVML; never wakes the GPU)
+                gpu_watts = self._gpu_mon.power
+        watts = self._rapl_rec.sample()
+        limits = self.throttle.window()
+        bats = battery.read()
+        main = bats[0] if bats else None
+        self.recorder.record({"cpu": s["cpu_temp"], "gpu": gpu, "cf": s["cpu_fan"],
+                              "gf": s["gpu_fan"], "ssd": disks.hottest_temp(),
+                              "load": self._cpu_load.sample() if self._cpu_load else None,
+                              "fq": limits.get("fq"), "thr": limits.get("thr"), "pl": limits.get("pl"),
+                              "cpw": watts.get("cpu"), "gpw": gpu_watts, "sys": watts.get("sys"),
+                              "bat": main["capacity"] if main else None,
+                              "pw": main["power"] if main and main["status"] == "Discharging" else None})
+        self.recorder.record_battery(bats)
+        self.recorder.record_smart(self.smart())
 
     # ---------------------------------------------------------- requests
     def handle(self, req: dict) -> dict:
@@ -217,13 +389,25 @@ class Daemon:
             with self.lock:
                 st = copy.deepcopy(self.state)
             return {"ok": True, "ready": self.ready, "error": self.error,
-                    "sensors": self.sensors(), "state": st, "ac": power.ac_online(),
+                    "sensors": self.sensors(), "throttle": self.throttle.last, "state": st,
+                    "fan_curve": dict(self.curve.info, points=st["fan_curve"]["points"]), "ac": power.ac_online(),
                     "hw": {"lcd_overdrive": self.hw_lcd_overdrive, "coolboost": self.hw_coolboost,
                            "lcd_overdrive_supported": self.overdrive_supported,
+                           "battery_limit": self.hw_battery_limit,
+                           "battery_limit_supported": self.battery_limit_supported,
                            "backlight_timeout": self.hw_backlight_timeout,
                            "backlight_timeout_supported": self.backlight_timeout_supported,
                            "gpu_mode_supported": self.gpu_mode_supported,
                            "gpu_mode": self.gpu_mode}}
+        if cmd == "disks":
+            return {"ok": True, "smart": self.smart()}
+        if cmd == "gpu_holders":
+            return {"ok": True, "holders": self.holders()}
+        if cmd == "history":
+            key = _choice(req.get("range", "24h"), tuple(history.RANGES))
+            if self.recorder is None:
+                return {"ok": True, "history": None}
+            return {"ok": True, "history": self.recorder.query(key)}
         if cmd == "set_power_plan":
             source = _choice(req.get("source"), ("ac", "battery"))
             plan = _choice(req.get("plan"), power.PLANS)
@@ -243,30 +427,48 @@ class Daemon:
         return {"ok": True}
 
     def cmd_set_fan(self, req: dict) -> None:
-        with self.lock:
-            fan = dict(self.state["fan"])
-        fan["mode"] = _choice(req.get("mode", fan["mode"]), ("auto", "max", "custom"))
-        for k in ("cpu_auto", "gpu_auto"):
-            if k in req:
-                fan[k] = _bool(req[k])
-        for k in ("cpu_percent", "gpu_percent"):
-            if k in req:
-                fan[k] = _int(req[k], 0, 100) // 10 * 10
-        self.ctl.set_fan_mode(**fan)
-        with self.lock:
-            self.state["fan"] = fan
-            self._save_state()
+        with self.fan_lock:
+            with self.lock:
+                fan = dict(self.state["fan"])
+            fan["mode"] = _choice(req.get("mode", fan["mode"]), ("auto", "max", "custom", "curve"))
+            for k in ("cpu_auto", "gpu_auto"):
+                if k in req:
+                    fan[k] = _bool(req[k])
+            for k in ("cpu_percent", "gpu_percent"):
+                if k in req:
+                    fan[k] = _int(req[k], 0, 100) // 10 * 10
+            if fan["mode"] != "curve":
+                self.ctl.set_fan_mode(**fan)
+            with self.lock:
+                self.state["fan"] = fan
+                self._save_state()
+            self.curve.reset()
+            if fan["mode"] == "curve":
+                self.fan_curve_step(0.0)  # start right away instead of waiting for the thread
+
+    def cmd_set_fan_curve(self, req: dict) -> None:
+        try:
+            points = fancurve.validate(req.get("points"))
+        except ValueError as e:
+            raise ValidationError(str(e)) from e
+        with self.fan_lock:
+            with self.lock:
+                self.state["fan_curve"] = {"points": points}
+                self._save_state()
+            if self.state["fan"]["mode"] == "curve":
+                self.fan_curve_step(0.0)
 
     def cmd_set_fan_speed(self, req: dict) -> None:
         fan = _choice(req.get("fan"), ("cpu", "gpu"))
         pct = _int(req.get("percent"), 0, 100) // 10 * 10
-        with self.lock:
-            if self.state["fan"]["mode"] != "custom":
-                raise ValidationError("fan speed can only be set in Custom mode")
-        self.ctl.set_fan_speed(fan, pct)
-        with self.lock:
-            self.state["fan"][fan + "_percent"] = pct
-            self._save_state()
+        with self.fan_lock:
+            with self.lock:
+                if self.state["fan"]["mode"] != "custom":
+                    raise ValidationError("fan speed can only be set in Custom mode")
+            self.ctl.set_fan_speed(fan, pct)
+            with self.lock:
+                self.state["fan"][fan + "_percent"] = pct
+                self._save_state()
 
     def cmd_set_coolboost(self, req: dict) -> None:
         on = _bool(req.get("on"))
@@ -292,6 +494,16 @@ class Daemon:
         self.hw_lcd_overdrive = on
         with self.lock:
             self.state["lcd_overdrive"] = on
+            self._save_state()
+
+    def cmd_set_battery_limit(self, req: dict) -> None:
+        on = _bool(req.get("on"))
+        if not self.battery_limit_supported:
+            raise ValidationError("this firmware has no battery charge limit")
+        self.ctl.set_battery_limit(on)
+        self.hw_battery_limit = on
+        with self.lock:
+            self.state["battery_limit"] = on
             self._save_state()
 
     def cmd_set_win_key(self, req: dict) -> None:
@@ -414,6 +626,9 @@ def main() -> int:
 
     d = Daemon()
     d.startup()
+    d.start_throttle_monitor()
+    d.start_fan_curve()
+    d.start_recorder()
 
     server = start_server(d, SOCKET_PATH)
 
@@ -437,6 +652,8 @@ def main() -> int:
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, 2, lambda: (loop.quit(), False)[1])
     log.info("nitrosensed ready (hardware %s)", "OK" if d.ready else "UNAVAILABLE: " + d.error)
     loop.run()
+    d._stop.set()
+    d.release_fans()
     server.shutdown()
     try:
         os.unlink(SOCKET_PATH)

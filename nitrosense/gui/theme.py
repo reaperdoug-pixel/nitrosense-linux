@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 
 import cairo
@@ -178,3 +179,88 @@ def register_fonts(directory: str | None) -> None:
         fc.FcConfigAppFontAddDir(None, directory.encode())
     except OSError:
         pass
+
+
+def draw_fallback_icon(cr, key: str, w: float, h: float, color: str, alpha: float = 1.0) -> None:
+    """Simple vector icons used when the original NitroSense artwork is not installed."""
+    cr.save()
+    cr.set_source_rgba(*_with_alpha(color, alpha))
+    cr.set_line_width(2)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    cx, cy = w / 2, h / 2
+    if key.startswith("Close"):
+        r = min(w, h) * 0.3
+        cr.move_to(cx - r, cy - r)
+        cr.line_to(cx + r, cy + r)
+        cr.move_to(cx + r, cy - r)
+        cr.line_to(cx - r, cy + r)
+        cr.stroke()
+    elif key.startswith("Minimize"):
+        r = min(w, h) * 0.35
+        cr.move_to(cx - r, cy + 4)
+        cr.line_to(cx + r, cy + 4)
+        cr.stroke()
+    elif key.startswith("Setting"):
+        r = min(w, h) * 0.2
+        cr.arc(cx, cy, r, 0, 2 * math.pi)
+        cr.stroke()
+        for i in range(8):
+            a = i * math.pi / 4
+            cr.move_to(cx + math.cos(a) * (r + 2), cy + math.sin(a) * (r + 2))
+            cr.line_to(cx + math.cos(a) * (r + 5), cy + math.sin(a) * (r + 5))
+        cr.stroke()
+    elif key.startswith("Lighting"):
+        kw, kh = w - 6, h - 10
+        x0, y0 = 3, 5
+        cr.set_line_width(1.5)
+        cr.rectangle(x0, y0, kw, kh)
+        cr.stroke()
+        for row in range(2):
+            for col in range(4):
+                kx = x0 + 3 + col * (kw - 6) / 4
+                ky = y0 + 3 + row * (kh - 6) / 2
+                cr.rectangle(kx, ky, (kw - 6) / 4 - 2, (kh - 6) / 2 - 2)
+        cr.fill()
+    elif key.startswith("ShowCoolBooster"):
+        r = min(w, h) / 2 - 1.5
+        cr.set_line_width(1.5)
+        cr.arc(cx, cy, r, 0, 2 * math.pi)
+        cr.stroke()
+        cr.move_to(cx, cy - r * 0.1)
+        cr.line_to(cx, cy + r * 0.5)
+        cr.stroke()
+        cr.arc(cx, cy - r * 0.5, 0.9, 0, 2 * math.pi)
+        cr.fill()
+    cr.restore()
+
+
+CARD_FILL = "#181818"
+CARD_BORDER = "#2E2E2E"
+TEXT_INACTIVE = "#8C8C8C"
+
+
+def rounded_rect(cr, x: float, y: float, w: float, h: float, r: float) -> None:
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+
+
+def draw_fallback_background(cr, w: float, h: float) -> None:
+    """Gradient backdrop plus the three section cards, used when the NitroSense artwork
+    (img_bg_nitro.png / img_bg_newboard_nitro.png) is not installed."""
+    grad = cairo.LinearGradient(0, 0, 0, h)
+    grad.add_color_stop_rgb(0, 0.035, 0.035, 0.043)
+    grad.add_color_stop_rgb(1, 0.067, 0.067, 0.075)
+    cr.set_source(grad)
+    cr.paint()
+    for x, y, cw, ch in ((84, 92, 1152, 272), (84, 372, 300, 336), (396, 372, 840, 336)):
+        rounded_rect(cr, x + 0.5, y + 0.5, cw - 1, ch - 1, 10)
+        cr.set_source_rgba(*rgba(CARD_FILL))
+        cr.fill_preserve()
+        cr.set_source_rgba(*rgba(CARD_BORDER))
+        cr.set_line_width(1)
+        cr.stroke()

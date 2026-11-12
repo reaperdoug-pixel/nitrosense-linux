@@ -51,6 +51,48 @@ suspend/resume and plugging or unplugging the charger, as they do on Windows.
 
 ### Monitoring
 - CPU and GPU **temperature** (red) and **load** (orange), refreshed every second.
+- **Power in watts**: CPU package power from the Intel RAPL counters (read by the service,
+  which runs as root: the counters are root-only) and GPU power from NVML (only while the dGPU
+  is already awake). Shown on the Home tab and in the Monitoring header; the History tab charts
+  both with the average, peak and an estimate of the energy used in the period. The service also
+  records the iGPU and platform (psys) power for later use.
+- **Throttling detection**: the service checks every 2 s whether the CPU is being held back,
+  using kernel interfaces only: hardware thermal throttle counters, thermald/DPTF cooling
+  devices, package power against its limits and the frequency cap. Home shows the state and the
+  clock (e.g. "CPU 3,3 de 4,6 GHz") and the thermal protection point (Tjmax minus the TCC
+  offset); a desktop alert appears after 10 s of continuous thermal throttling. The History
+  tab charts the CPU frequency with the throttled periods shaded. The dGPU's clock and NVML
+  slowdown reasons are shown while it is awake.
+- **Processes tab**: the heaviest programs by CPU (share of the whole processor) and by
+  memory (private resident pages, so shared libraries are not counted per process), grouped by
+  program (a browser is one row). GPU users come from `nvidia-smi pmon`, run only while the dGPU
+  is awake so monitoring never wakes it. A last card lists the programs holding `/dev/nvidia*`
+  open, i.e. what keeps the dGPU from suspending; the service provides it because other users'
+  file descriptors need root (`gpu_holders` command).
+- **Fan curve** (Scenario tab, "Curva" mode): drag the points of a temperature/speed graph (or
+  pick Quiet / Balanced / Performance); the service follows the hottest of the CPU and the
+  awake GPU every 2 s and drives both fans in custom mode. Safety rules the curve cannot
+  override: speeds never below 20 % and the curve must reach 100 % by 90 C; 100 % at 88 C (CPU) /
+  82 C (GPU) whatever the curve says; speed rises at once but falls only after the lower target
+  held for 8 s; if every temperature sensor fails the fans go back to the firmware's automatic
+  mode; the fans are also handed back to automatic when the service stops.
+- **Battery tab**: health (full-charge capacity against the original design, from
+  `/sys/class/power_supply`), cycles, charge, power draw and time left (smoothed over the last
+  minute), voltage and temperature when the firmware reports it, with plain-language advice.
+  Charge and power history charts use the service's history; the health trend is logged every
+  6 h. Only a critical battery problem raises a desktop alert. A switch limits charging to
+  about 80 % (Acer's "battery health mode", read and set through the same WMI interface as the
+  `acer-wmi-battery` driver); it appears only if the firmware reports it. `tools/probe_battery.py`
+  is a read-only check for it.
+- **History tab**: the service samples CPU/GPU/SSD temperature, fan speed and CPU load every
+  30 s, even with the window closed, and keeps 30 days in `/var/lib/nitrosense/history/`.
+  The tab shows 1 h to 30 d charts (average, peak, CPU load), min/avg/max, minutes spent
+  above the attention limits, and the SSD wear trend (SMART counters logged every 6 h).
+- **Alerts with the window closed**: `nitrosense-watch` starts with the desktop session and
+  sends desktop notifications for high CPU/GPU temperature, a stopped fan and SSD health
+  problems (new or worse alerts; critical ones repeat every 30 min). To disable it for one
+  user, copy `/etc/xdg/autostart/nitrosense-watch.desktop` to `~/.config/autostart/` and add
+  `Hidden=true`.
 - 12-minute history charts (720 samples), with **Min/Max** over the visible history.
 - Hover over a chart to see the time, temperature and load at that point.
 - Temperatures in **°C or °F**.

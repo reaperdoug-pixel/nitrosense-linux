@@ -260,3 +260,21 @@ def parse_hex_color(text: str) -> tuple[int, int, int]:
 
 def _clamp(v: int, lo: int, hi: int) -> int:
     return lo if v < lo else hi if v > hi else v
+
+
+# ---------------------------------------------------------------- battery charge limit
+BATTERY_HEALTH_GET = 0x0101  # battery 1, query 1
+BATTERY_HEALTH_MODE = 1      # function bit: charge limit (2 would be calibration, not used)
+
+
+def battery_health_set(on: bool) -> int:
+    """SetBatteryHealth input: battery 1, function mask = health mode, status 0/1."""
+    return 1 | (BATTERY_HEALTH_MODE << 8) | (int(on) << 16)
+
+
+def battery_health_decode(output: int) -> bool | None:
+    """GetBatteryHealth output: byte 0 lists supported functions, byte 3 is the health mode state.
+    -> None when the firmware does not support the charge limit."""
+    if not output & BATTERY_HEALTH_MODE:
+        return None
+    return ((output >> 24) & 0xFF) > 0

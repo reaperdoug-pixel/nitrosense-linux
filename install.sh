@@ -1,8 +1,8 @@
 #!/bin/bash
 # NitroSense for Linux installer.
 #   sudo ./install.sh "/path/to/Nitro Sense_Acer_..._W10x64_A"
-# The path is your own NitroSense download for Windows; artwork, fonts, strings
-# and the per-model settings are read from it (nothing is executed).
+# The path (optional) is your own NitroSense 3.x download for Windows; artwork, fonts,
+# strings and the per-model settings are read from it (nothing is executed).
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -10,8 +10,10 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 PKG="${1:-}"
-if [ -z "$PKG" ] || [ ! -e "$PKG" ]; then
-    echo "usage: sudo $0 <path to the NitroSense Windows package folder>" >&2
+# The Windows package is optional: without it the GUI runs without the original artwork
+# and the model configuration comes from data/models/<product> (if bundled).
+if [ -n "$PKG" ] && [ ! -e "$PKG" ]; then
+    echo "package path not found: $PKG" >&2
     exit 1
 fi
 SRC="$(cd "$(dirname "$0")" && pwd)"
@@ -47,22 +49,31 @@ rm -rf /opt/nitrosense
 install -d /opt/nitrosense/bin
 cp -r "$SRC/nitrosense" /opt/nitrosense/
 find /opt/nitrosense -name '__pycache__' -prune -exec rm -rf {} +
-install -m 0755 "$SRC/bin/nitrosense" "$SRC/bin/nitrosensed" /opt/nitrosense/bin/
+install -m 0755 "$SRC/bin/nitrosense" "$SRC/bin/nitrosensed" "$SRC/bin/nitrosense-watch" /opt/nitrosense/bin/
 chown -R root:root /opt/nitrosense
 chmod -R go-w /opt/nitrosense
 
-echo "==> Extracting NitroSense artwork from the Windows package"
 rm -rf /usr/share/nitrosense/assets
 install -d /usr/share/nitrosense/assets
-(cd /opt/nitrosense && python3 -I -c 'import sys; sys.path.insert(0, "."); from nitrosense.extract import main; sys.exit(main(["x", sys.argv[1], sys.argv[2]]))' \
-    "$PKG" /usr/share/nitrosense/assets)
+if [ -n "$PKG" ]; then
+    echo "==> Extracting NitroSense artwork from the Windows package"
+    (cd /opt/nitrosense && python3 -I -c 'import sys; sys.path.insert(0, "."); from nitrosense.extract import main; sys.exit(main(["x", sys.argv[1], sys.argv[2]]))' \
+        "$PKG" /usr/share/nitrosense/assets) \
+        || echo "    WARNING: could not extract artwork (is this the 3.x package?); continuing without it"
+else
+    echo "==> No Windows package given: running without the original artwork"
+fi
 
 echo "==> Model configuration"
 install -d /etc/nitrosense/model
-PLUG="$(find "$PKG" -type d -path "*/Plugs/$PRODUCT" | head -n1 || true)"
+PLUG=""
+[ -n "$PKG" ] && PLUG="$(find "$PKG" -type d -path "*/Plugs/$PRODUCT" | head -n1 || true)"
 if [ -n "$PLUG" ]; then
     cp "$PLUG"/*.ini /etc/nitrosense/model/
     echo "    using Plugs/$PRODUCT"
+elif [ -d "$SRC/data/models/$PRODUCT" ]; then
+    cp "$SRC/data/models/$PRODUCT"/*.ini /etc/nitrosense/model/
+    echo "    using bundled data/models/$PRODUCT"
 else
     echo "    WARNING: no Plugs/$PRODUCT in the package, using AN515-44 defaults"
 fi
@@ -89,6 +100,11 @@ install -D -m 0644 "$SRC/data/io.github.napejoon.NitroSense.desktop" \
     /usr/share/applications/io.github.napejoon.NitroSense.desktop
 update-desktop-database -q /usr/share/applications 2>/dev/null || true
 ln -sf /opt/nitrosense/bin/nitrosense /usr/local/bin/nitrosense
+
+echo "==> Background alert watcher (notifications even with the window closed)"
+# Starts with the desktop session. To turn it off for one user, copy this file to
+# ~/.config/autostart/ and add the line Hidden=true.
+install -D -m 0644 "$SRC/data/nitrosense-watch.desktop" /etc/xdg/autostart/nitrosense-watch.desktop
 
 echo "==> NitroSense key (scancode 0xf5 -> XF86Launch1 -> open NitroSense)"
 install -D -m 0644 "$SRC/data/61-nitrosense.hwdb" /etc/udev/hwdb.d/61-nitrosense.hwdb

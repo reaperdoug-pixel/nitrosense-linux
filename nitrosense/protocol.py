@@ -5,9 +5,15 @@ SOCKET_PATH = SOCKET_DIR + "/nitrosense.sock"
 ALLOWED_USERS_FILE = "/etc/nitrosense/allowed-users"
 STATE_DIR = "/var/lib/nitrosense"
 STATE_FILE = STATE_DIR + "/state.json"
+HISTORY_DIR = STATE_DIR + "/history"
 MAX_REQUEST = 64 * 1024
 
 DEFAULT_ZONE_COLOR = "#FF0000"  # HW_Support.ini [ZoneDefaultColor] for AN515-44
+
+
+def _default_curve() -> list:
+    from .fancurve import DEFAULT_POINTS
+    return [list(p) for p in DEFAULT_POINTS]
 
 
 def default_state(zone_colors: list[str] | None = None) -> dict:
@@ -15,6 +21,7 @@ def default_state(zone_colors: list[str] | None = None) -> dict:
     return {
         "fan": {"mode": "auto", "cpu_auto": False, "gpu_auto": False,
                 "cpu_percent": 50, "gpu_percent": 50},
+        "fan_curve": {"points": _default_curve()},
         "coolboost": None,
         "keyboard": {
             "mode": "static",
@@ -30,6 +37,7 @@ def default_state(zone_colors: list[str] | None = None) -> dict:
         "lcd_overdrive": None,
         "win_key": None,
         "backlight_timeout": None,
+        "battery_limit": None,
         "power": {"ac": "balance", "battery": "balance"},
         "power_applied": False,
     }

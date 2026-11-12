@@ -76,6 +76,19 @@ class Controller:
         except WmiError:
             return None
 
+    def get_battery_limit(self) -> bool | None:
+        """True/False = charge limit on/off; None = not supported (or the firmware did not answer)."""
+        try:
+            return enc.battery_health_decode(self.wmi.call("GetBatteryHealth", enc.BATTERY_HEALTH_GET))
+        except WmiError:
+            return None
+
+    def set_battery_limit(self, on: bool) -> None:
+        # the set call has no meaningful status byte, so confirm by reading the state back
+        self.wmi.call("SetBatteryHealth", enc.battery_health_set(on))
+        if self.get_battery_limit() != on:
+            raise WmiError("the firmware did not accept the battery charge limit")
+
     def get_backlight(self) -> tuple[int, bool] | None:
         try:
             return enc.backlight_decode(
