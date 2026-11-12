@@ -1,4 +1,4 @@
-"""Unprivileged system monitoring: CPU load and NVIDIA GPU load/temperature.
+"""Unprivileged system monitoring: CPU load and GPU load/temperature (NVIDIA, or AMD via sysfs).
 
 Windows NitroSense reads CPU load from the "% Processor Time" counter and
 GPU load from the "GPU Engine" counters, and shows "Discrete GPU is idle"
@@ -11,6 +11,7 @@ from __future__ import annotations
 import ctypes
 import glob
 import os
+import re
 
 
 class CpuLoad:
@@ -34,12 +35,15 @@ class CpuLoad:
         return max(0.0, min(100.0, 100.0 * (dt - (idle - pi)) / dt))
 
 
-def _nvidia_pci_devices() -> list[str]:
+PCI_ROOT = "/sys/bus/pci/devices"
+
+
+def _gpu_pci_devices(vendor: str, root: str = PCI_ROOT) -> list[str]:
     devs = []
-    for d in glob.glob("/sys/bus/pci/devices/*"):
+    for d in sorted(glob.glob(os.path.join(root, "*"))):
         try:
             with open(os.path.join(d, "vendor")) as f:
-                if f.read().strip() != "0x10de":
+                if f.read().strip() != vendor:
                     continue
             with open(os.path.join(d, "class")) as f:
                 if not f.read().strip().startswith("0x03"):
@@ -48,6 +52,33 @@ def _nvidia_pci_devices() -> list[str]:
         except OSError:
             continue
     return devs
+
+
+def _nvidia_pci_devices(root: str = PCI_ROOT) -> list[str]:
+    return _gpu_pci_devices("0x10de", root)
+
+
+def _amd_pci_devices(root: str = PCI_ROOT) -> list[str]:
+    """The AMD GPU to watch: the discrete one when there is one, else the APU's graphics."""
+    devs = _gpu_pci_devices("0x1002", root)
+    discrete = []
+    for d in devs:
+        try:
+            with open(os.path.join(d, "boot_vga")) as f:
+                if f.read().strip() == "1":
+                    continue  # the boot display adapter is the integrated one
+        except OSError:
+            pass
+        discrete.append(d)
+    return discrete or devs[:1]
+
+
+def _num(path: str) -> int | None:
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
 
 
 class _NvmlUtil(ctypes.Structure):
@@ -68,10 +99,18 @@ def gpu_throttle(mask: int | None) -> dict:
 
 
 class GpuMonitor:
-    """Reports (load %, temperature) for the NVIDIA dGPU, or idle=True."""
+    """Reports (load %, temperature) for the NVIDIA dGPU, or idle=True.
 
-    def __init__(self) -> None:
-        self.pci = _nvidia_pci_devices()
+    Without an NVIDIA GPU it falls back to an AMD one (amdgpu sysfs: load, temperature, power
+    and clock; no slowdown reasons, so `reasons` stays None).
+    """
+
+    def __init__(self, pci_root: str = PCI_ROOT) -> None:
+        self.pci = _nvidia_pci_devices(pci_root)
+        self.vendor = "nvidia"
+        if not self.pci:
+            self.pci = _amd_pci_devices(pci_root)
+            self.vendor = "amd" if self.pci else "nvidia"
         self._nvml = None
         self._handle = None
         self.name = ""
@@ -93,6 +132,34 @@ class GpuMonitor:
             except OSError:
                 pass
         return bool(self.pci)
+
+    def _sample_amd(self) -> tuple[bool, float | None, int | None]:
+        """amdgpu exposes everything as plain files; reading them does not wake a sleeping GPU
+        (awake() has already been checked)."""
+        dev = self.pci[0]
+        load = _num(os.path.join(dev, "gpu_busy_percent"))
+        temp = power = freq = None
+        for hw in sorted(glob.glob(os.path.join(dev, "hwmon", "hwmon*"))):
+            t = _num(os.path.join(hw, "temp1_input"))
+            if t is not None:
+                temp = round(t / 1000)
+            w = _num(os.path.join(hw, "power1_average"))
+            if w is None:
+                w = _num(os.path.join(hw, "power1_input"))
+            if w is not None:
+                power = w / 1e6
+            f = _num(os.path.join(hw, "freq1_input"))
+            if f is not None:
+                freq = round(f / 1e6)
+            break
+        self.power, self.clock = power, freq
+        try:  # "1: 2400Mhz *" lines; the highest is the clock ceiling
+            with open(os.path.join(dev, "pp_dpm_sclk")) as f:
+                mhz = [int(m) for m in re.findall(r"(\d+)\s*[Mm][Hh][Zz]", f.read())]
+            self.clock_max = max(mhz) if mhz else None
+        except OSError:
+            pass
+        return False, (float(load) if load is not None else None), temp
 
     def _init_nvml(self) -> bool:
         if self._handle is not None:
@@ -141,6 +208,8 @@ class GpuMonitor:
         if not self.awake():
             self._shutdown_nvml()
             return True, None, None
+        if self.vendor == "amd":
+            return self._sample_amd()
         if not self._init_nvml():
             return False, None, None
         util = _NvmlUtil()

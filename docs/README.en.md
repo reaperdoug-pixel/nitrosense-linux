@@ -85,11 +85,11 @@ What depends on the hardware:
 | Feature | Needs |
 |---|---|
 | Fan control, sensors, CoolBoost, power plans | The Acer WMI methods (`AcerGamingFunction`) and the `acpi_call` module |
-| CPU power in watts | Intel RAPL counters under `/sys/class/powercap` (Intel; AMD untested) |
-| CPU throttling detection | The kernel's `thermal_throttle` counters and thermal cooling devices (Intel) |
+| CPU power in watts | Intel RAPL counters under `/sys/class/powercap` (Intel and AMD Zen; AMD was only tested with samples, not on real hardware) |
+| CPU throttling detection | The kernel's `thermal_throttle` counters and thermal cooling devices (Intel only; on AMD the "frequency lowered by the system" notice remains) |
 | Disk health | **NVMe** (read natively) or **SATA/SAS/USB**, HDD or SSD (through the `smartmontools` package) |
-| GPU power, clock and slowdown reasons | An NVIDIA GPU with the proprietary driver (`libnvidia-ml`) |
-| GPU per-program use | `nvidia-smi` |
+| GPU power, clock and slowdown reasons | An NVIDIA GPU with the proprietary driver (`libnvidia-ml`); on an AMD GPU (`amdgpu`) they come from sysfs, without slowdown reasons |
+| GPU per-program use | `nvidia-smi` (NVIDIA only) |
 | Battery charge limit | The Acer battery health WMI interface (GUID `79772EC5-…`); the switch appears only when the firmware reports it |
 | Keyboard lighting | The service supports it, but the dashboard has no lighting panel (see [Limitations](#limitations)); the ANV15-51 firmware rejects the backlight command anyway |
 
@@ -591,8 +591,8 @@ not running.
 **The discrete GPU never sleeps**: open the **Processos** tab, which lists the programs holding it
 open. Closing them lets it suspend (`cat /sys/bus/pci/devices/0000:01:00.0/power/runtime_status`).
 
-**No power in watts**: RAPL counters are root-only, so the service must run as root and be up to date;
-AMD machines are untested. GPU power appears only while the GPU is awake.
+**No power in watts**: RAPL counters are root-only, so the service must run as root and be up to date; on AMD machines the kernel must expose RAPL (recent versions do), which
+was not tested on real hardware. GPU power appears only while the GPU is awake.
 
 **The battery-limit switch is missing**: the firmware did not report the interface. Run
 `sudo python3 -I tools/probe_battery.py` to see what it answers.
@@ -694,7 +694,10 @@ layer (`encoders.py`, `wmi.py`, `controller.py`) is still upstream's work.
   disk's health, but the space used only appears for partitions mounted directly. The SATA/HDD support
   was written from real `smartctl` outputs but has not been tested on a real SATA drive (the development
   laptop only has NVMe).
-- **Intel-centric sensors**: CPU watts and throttling detection use Intel interfaces; AMD is untested.
+- **AMD support**: CPU temperature (`k10temp`), watts (RAPL) and the AMD GPU through sysfs are
+  implemented and were tested only against simulated sysfs trees, not on real hardware. Thermal
+  throttling detection (`thermal_throttle` counters) and per-program GPU use remain Intel- and
+  NVIDIA-only.
 - **GPU data**: only while the discrete GPU is already awake; per-program GPU use needs `nvidia-smi`.
 - **Platform power** (`psys`) is recorded but not shown: on the ANV15-51 it reads lower than the CPU
   package, so it is not trustworthy there.

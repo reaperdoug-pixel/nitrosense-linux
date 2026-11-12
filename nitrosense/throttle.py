@@ -55,9 +55,9 @@ class CpuThrottle:
                     self.cooling.append((key, os.path.join(dev, "cur_state")))
         zone = os.path.join(powercap, "intel-rapl:0")
         self.pl_files = [os.path.join(zone, f"constraint_{i}_power_limit_uw") for i in (0, 1)]
-        self.tj_max: float | None = None  # coretemp's critical temperature (Tjmax), in C
+        self.tj_max: float | None = None  # coretemp/k10temp critical temperature (Tjmax), in C
         for hw in glob.glob(os.path.join(hwmon, "hwmon*")):
-            if _text(os.path.join(hw, "name")) == "coretemp":
+            if _text(os.path.join(hw, "name")) in ("coretemp", "k10temp"):  # Intel / AMD
                 crit = _int(os.path.join(hw, "temp1_crit"))
                 self.tj_max = crit / 1000 if crit else None
                 break

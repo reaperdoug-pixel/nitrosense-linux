@@ -82,11 +82,11 @@ O que depende do hardware:
 | Recurso | Precisa de |
 |---|---|
 | Controle de ventoinha, sensores, CoolBoost, planos de energia | Os métodos WMI da Acer (`AcerGamingFunction`) e o módulo `acpi_call` |
-| Consumo da CPU em watts | Contadores RAPL da Intel em `/sys/class/powercap` (Intel; AMD não testado) |
-| Detecção de limitação da CPU | Contadores `thermal_throttle` do kernel e dispositivos de resfriamento térmico (Intel) |
+| Consumo da CPU em watts | Contadores RAPL da Intel em `/sys/class/powercap` (Intel e AMD Zen; o AMD só foi testado com amostras, não em hardware real) |
+| Detecção de limitação da CPU | Contadores `thermal_throttle` do kernel e dispositivos de resfriamento térmico (só Intel; em AMD fica o aviso de frequência reduzida pelo sistema) |
 | Saúde do disco | **NVMe** (leitura nativa) ou **SATA/SAS/USB**, HDD ou SSD (pelo pacote `smartmontools`) |
-| Potência, clock e motivos de redução da GPU | Uma GPU NVIDIA com o driver proprietário (`libnvidia-ml`) |
-| Uso da GPU por programa | `nvidia-smi` |
+| Potência, clock e motivos de redução da GPU | Uma GPU NVIDIA com o driver proprietário (`libnvidia-ml`); numa GPU AMD (`amdgpu`) vêm do sysfs, sem os motivos de redução |
+| Uso da GPU por programa | `nvidia-smi` (só NVIDIA) |
 | Limite de carga da bateria | A interface WMI de saúde da bateria da Acer (GUID `79772EC5-…`); o interruptor só aparece se o firmware a reportar |
 | Iluminação do teclado | O serviço suporta, mas o painel não tem tela de iluminação (veja [Limitações](#limitações)); o firmware do ANV15-51 rejeita o comando de qualquer forma |
 
@@ -596,7 +596,7 @@ aberta. Fechá-los deixa a GPU suspender
 (`cat /sys/bus/pci/devices/0000:01:00.0/power/runtime_status`).
 
 **Sem consumo em watts**: os contadores RAPL são só do root, então o serviço precisa rodar como root
-e estar atualizado; máquinas AMD não foram testadas. A potência da GPU só aparece com ela acordada.
+e estar atualizado; em máquinas AMD o kernel precisa expor o RAPL (versões recentes expõem), e isso não foi testado em hardware real. A potência da GPU só aparece com ela acordada.
 
 **Falta o interruptor do limite de carga**: o firmware não reportou a interface. Rode
 `sudo python3 -I tools/probe_battery.py` para ver o que ele responde.
@@ -704,8 +704,10 @@ original.
   saúde do disco físico, mas o espaço em uso só aparece para partições montadas diretamente. O suporte a
   SATA/HDD foi escrito a partir de saídas reais do `smartctl`, mas não foi testado num disco SATA de
   verdade (o notebook de desenvolvimento só tem NVMe).
-- **Sensores voltados à Intel**: os watts da CPU e a detecção de limitação usam interfaces da Intel;
-  AMD não foi testado.
+- **Suporte a AMD**: temperatura da CPU (`k10temp`), watts (RAPL) e a GPU AMD pelo sysfs foram
+  implementados e testados só com árvores de sysfs simuladas, não em hardware real. A detecção de
+  limitação por calor (contadores `thermal_throttle`) e o uso da GPU por programa continuam só
+  para Intel e NVIDIA.
 - **Dados da GPU**: só enquanto a GPU dedicada já está acordada; o uso da GPU por programa exige o
   `nvidia-smi`.
 - **Potência da plataforma** (`psys`): é gravada mas não é mostrada: no ANV15-51 ela lê menos que o
