@@ -29,6 +29,8 @@ fi
 
 echo "==> Installing dependencies"
 apt-get install -y python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-4.0 acpi-call-dkms
+# optional: the tray icon of the alert watcher (without them the watcher still notifies)
+apt-get install -y gir1.2-gtk-3.0 gir1.2-xapp-1.0 || echo "    tray icon libraries not installed (optional)"
 
 echo "==> Loading acpi_call (signed by DKMS with your enrolled MOK key)"
 if ! modprobe acpi_call; then
@@ -95,6 +97,9 @@ else
     install -D -m 0644 "$SRC/data/icons/io.github.napejoon.NitroSense.svg" \
         /usr/share/icons/hicolor/scalable/apps/io.github.napejoon.NitroSense.svg
 fi
+for t in nitrosense-tray nitrosense-tray-warning nitrosense-tray-critical; do
+    install -D -m 0644 "$SRC/data/icons/$t.svg" "/usr/share/icons/hicolor/scalable/apps/$t.svg"
+done
 gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
 install -D -m 0644 "$SRC/data/io.github.napejoon.NitroSense.desktop" \
     /usr/share/applications/io.github.napejoon.NitroSense.desktop

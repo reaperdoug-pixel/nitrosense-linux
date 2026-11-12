@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NitroSense for Linux tray icon (original artwork, MIT like the rest of the repository) -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#8c5dd9"/>
+  <path d="M7 17V7h2.2l5.6 7.2V7H17v10h-2.1L9.2 9.8V17z" fill="#ffffff"/>
+</svg>

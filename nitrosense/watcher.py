@@ -16,8 +16,8 @@ import time
 from . import alerts, battery, disks, set_process_name
 from .client import Client, DaemonError
 
-POLL = 15           # seconds between checks
-SMART_EVERY = 4     # ...of which every 4th also reads SMART (once a minute)
+POLL = 5            # seconds between checks (also refreshes the tray icon)
+SMART_EVERY = 12    # ...of which every 12th also reads SMART (once a minute)
 REMIND = 30 * 60    # a critical alert that persists is repeated this often
 
 LOCK_PATH = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "nitrosense-watch.lock")
@@ -94,8 +94,8 @@ class Notifier:
         self.ids[key] = res.unpack()[0]
 
 
-def check(client: Client, smart_cache: dict, read_smart: bool):
-    """One evaluation round -> alert list, or None when the service is unreachable."""
+def poll(client: Client, smart_cache: dict, read_smart: bool):
+    """One evaluation round -> (alert list, service status); (None, None) when it is unreachable."""
     try:
         status = client.request("status")
         if read_smart:
@@ -104,17 +104,35 @@ def check(client: Client, smart_cache: dict, read_smart: bool):
             except DaemonError:
                 pass
     except DaemonError:
-        return None
+        return None, None
     sensors = status.get("sensors", {})
     assessed = []
     for d in disks.basic():
         raw = smart_cache.get("smart", {}).get(d["name"])
         assessed.append((d, disks.assess(d, raw if raw and "error" not in raw else None)))
-    return alerts.evaluate(sensors.get("cpu_temp"), sensors.get("gpu_temp"),
-                           sensors.get("cpu_fan"), sensors.get("gpu_fan"), assessed,
-                           [(b, battery.assess(b)) for b in battery.read()],
-                           status.get("throttle"),
-                           (status.get("gpu_throttle") or {}).get("thermal_for_s", 0) >= alerts.THERMAL_ALERT_S)
+    found = alerts.evaluate(sensors.get("cpu_temp"), sensors.get("gpu_temp"),
+                            sensors.get("cpu_fan"), sensors.get("gpu_fan"), assessed,
+                            [(b, battery.assess(b)) for b in battery.read()],
+                            status.get("throttle"),
+                            (status.get("gpu_throttle") or {}).get("thermal_for_s", 0)
+                            >= alerts.THERMAL_ALERT_S)
+    return found, status
+
+
+def check(client: Client, smart_cache: dict, read_smart: bool):
+    """Alert list for one round, or None when the service is unreachable."""
+    return poll(client, smart_cache, read_smart)[0]
+
+
+def open_dashboard() -> None:
+    """Start NitroSense (the window is single-instance: a running one is brought to the front)."""
+    from gi.repository import Gio
+    here = os.path.dirname(os.path.realpath(__file__))
+    for path in (os.path.join(here, "..", "bin", "nitrosense"), "/opt/nitrosense/bin/nitrosense"):
+        if os.path.exists(path):
+            Gio.Subprocess.new([os.path.realpath(path)], Gio.SubprocessFlags.NONE)
+            return
+    Gio.Subprocess.new(["nitrosense"], Gio.SubprocessFlags.NONE)
 
 
 def main() -> int:
@@ -130,11 +148,31 @@ def main() -> int:
     client, throttle, smart_cache = Client(), Throttle(), {}
     notifier = None
     tick = [0]
+    loop = GLib.MainLoop()
+    tray = None
+
+    def request(cmd: str, **kw) -> None:
+        try:
+            client.request(cmd, **kw)
+        except DaemonError as e:
+            print(f"{cmd} failed: {e}", file=sys.stderr)
+        GLib.idle_add(lambda: (step(), False)[1])  # refresh the icon right away
+
+    if "--no-tray" not in sys.argv and not os.environ.get("NITROSENSE_NO_TRAY"):
+        from . import tray as tray_mod
+        tray = tray_mod.create({
+            "open": open_dashboard,
+            "set_fan": lambda mode: request("set_fan", mode=mode),
+            "set_limit": lambda on: request("set_battery_limit", on=on),
+            "quit": loop.quit,
+        })
 
     def step() -> bool:
         nonlocal notifier
-        found = check(client, smart_cache, tick[0] % SMART_EVERY == 0)
+        found, status = poll(client, smart_cache, tick[0] % SMART_EVERY == 0)
         tick[0] += 1
+        if tray is not None:
+            tray.update(status, found or [], battery.read(), tray_mod.unit_preference())
         if found is None:
             return True
         for level, key, text in throttle.filter(found, time.monotonic()):
@@ -147,12 +185,13 @@ def main() -> int:
                 throttle.sent.pop(key, None)
         return True
 
-    loop = GLib.MainLoop()
     GLib.timeout_add_seconds(POLL, step)
     GLib.idle_add(lambda: (step(), False)[1])
     for sig in (signal.SIGTERM, signal.SIGINT):
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, lambda: (loop.quit(), False)[1])
     loop.run()
+    if tray is not None:
+        tray.destroy()
     return 0
 
 

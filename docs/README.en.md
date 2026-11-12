@@ -64,6 +64,9 @@ Behind the window:
   temperatures, a stopped fan, SSD or battery trouble, and sustained thermal throttling of the CPU or the GPU.
 - **Never wakes the discrete GPU.** NVML and `nvidia-smi` are used only while the GPU is
   already awake, so monitoring does not stop it from saving power.
+- **Tray icon** (in the watcher itself): changes colour with the most serious alert, shows the numbers
+  in its tooltip and lets you open the dashboard, switch the fan mode and turn the 80 % limit on with a
+  click.
 - **The NitroSense key** on the keyboard opens the dashboard.
 
 ---
@@ -108,6 +111,8 @@ check that the temperatures and RPM it prints look right.
 - **Secure Boot**: `acpi_call` is an out-of-tree module built by DKMS. With Secure Boot on,
   DKMS signs it with your Machine Owner Key (MOK). If you have never enrolled one, the system asks
   for a password during installation and for *Enroll MOK* on the next boot (blue screen).
+- Optional: `gir1.2-xapp-1.0` and `gir1.2-gtk-3.0` (the installer tries to install them), for the tray
+  icon; without them the watcher keeps sending notifications.
 - Optional: the NVIDIA driver for the GPU readings. If `thermald` or Intel DPTF is running, its
   limits show up in the throttling detection through the thermal cooling devices.
 - Optional: the **NitroSense package for Windows** of your model. It is only used for the
@@ -232,6 +237,21 @@ To check what any key sends: `sudo python3 -I tools/keyprobe.py 20` and press it
 the GNOME shortcut as your user: `cd /opt/nitrosense && python3 -m nitrosense.shortcut install`
 (or `remove` / `status`).
 
+### Tray icon
+The watcher (`nitrosense-watch`) shows an icon in the system tray (XApp StatusIcon: Cinnamon, MATE, XFCE
+and others) that refreshes every 5 s:
+- **Colour**: normal (purple), with an amber dot for **attention** and a red one for **critical**,
+  following the most serious [alert](#alerts). If the service becomes unreachable the amber dot shows.
+- **Tooltip** (hover): CPU temperature, RPM and watts, GPU temperature (or "GPU suspensa"), SSD, battery
+  with its health and the current alert.
+- **Click**: opens NitroSense (or brings the open window to the front).
+- **Menu** (right click): the same numbers, the **Ventoinha** submenu (Automático / Máx / Curva), the
+  **Limitar a carga a 80%** switch (locked during a calibration) and **Sair (para os alertas também)**,
+  which ends the watcher.
+
+To start the watcher without the icon, use `nitrosense-watch --no-tray` or the environment variable
+`NITROSENSE_NO_TRAY=1`.
+
 ---
 
 ## Alerts
@@ -335,6 +355,7 @@ does not involve the GPU): a hot GPU is busy, so those reads cannot keep it from
 | `nitrosense/history.py` | The 30-day history: per-day JSON-lines files, bucketing, summaries. |
 | `nitrosense/alerts.py` | The alert rules (a pure function shared by the window and the watcher). |
 | `nitrosense/watcher.py` | The background notifier (`nitrosense-watch`), talking to the notification daemon over D-Bus. |
+| `nitrosense/tray.py` | The watcher's tray icon (XApp), with the tooltip, the menu and the icon-per-alert rules. |
 | `nitrosense/power.py` | Power plans: CPU governor, boost and power-profiles-daemon. |
 | `nitrosense/gui/window.py`, `widgets.py` | The dashboard and its widgets (gauges, charts, the curve editor) and CSS. |
 | `nitrosense/extract.py`, `geometry.py`, `iconmaker.py` | Read an optional Windows package (artwork, icon). `gui/controls.py`, `gui/theme.py` and `gui/lighting.py` are helpers and the lighting panel from the original window. |
@@ -366,6 +387,7 @@ Windows switches Windows power schemes. Linux has none, so each plan maps to:
 | `~/.config/nitrosense/gui.json` | per-user GUI preferences (unit, last tab, history range) |
 | `/etc/systemd/system/nitrosensed.service` | service unit |
 | `/etc/xdg/autostart/nitrosense-watch.desktop` | starts the alert watcher with the desktop session |
+| `/usr/share/icons/hicolor/scalable/apps/nitrosense-tray*.svg` | the three tray icons (normal, attention, critical) |
 | `/etc/modules-load.d/nitrosense.conf` | loads `acpi_call` at boot |
 | `/usr/share/applications/io.github.napejoon.NitroSense.desktop` | menu entry (app ID `io.github.napejoon.NitroSense`) |
 | `/etc/udev/hwdb.d/61-nitrosense.hwdb` | NitroSense key → `XF86Launch1` |
@@ -524,6 +546,10 @@ After a **kernel update**, DKMS rebuilds the module automatically.
 running service is older than the window. Run the installer again, or copy the files and
 `sudo systemctl restart nitrosensed`.
 
+**No tray icon**: check that the panel has the tray applet (in Cinnamon, *XApp Status*), that the
+`gir1.2-xapp-1.0` package is installed and that the watcher was not started with `--no-tray`. Without the
+library the watcher only sends notifications and prints "tray icon unavailable".
+
 **No desktop notifications**: check that the watcher runs (`pgrep -f nitrosense-watch`) and that a
 notification daemon is running in your session. The window itself notifies only when the watcher is
 not running.
@@ -575,7 +601,7 @@ stays installed; remove it with `sudo apt remove acpi-call-dkms` if nothing else
 ## Development
 
 ```bash
-# unit tests (125): encoders, daemon against a simulated firmware, disks, battery, history,
+# unit tests (135): encoders, daemon against a simulated firmware, disks, battery, history,
 # RAPL, throttling, processes and the fan curve
 python3 -m unittest discover -s tests -v
 

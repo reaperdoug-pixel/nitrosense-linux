@@ -62,6 +62,8 @@ Por trás da janela:
   temperatura alta, ventoinha parada, problemas no SSD ou na bateria e limitação térmica prolongada da CPU ou da GPU.
 - **Nunca acorda a GPU dedicada.** O NVML e o `nvidia-smi` só são usados enquanto a GPU já está
   acordada, então o monitoramento não impede que ela economize energia.
+- **Ícone na bandeja** (no próprio vigia): muda de cor com o alerta mais grave, mostra os números
+  no balão e permite abrir o painel, trocar o modo da ventoinha e ligar o limite de 80% com um clique.
 - **A tecla NitroSense** do teclado abre o painel.
 
 ---
@@ -106,6 +108,8 @@ confira se as temperaturas e os RPM que ela mostra parecem certos.
 - **Secure Boot**: o `acpi_call` é um módulo de fora do kernel, compilado pelo DKMS. Com Secure Boot
   ligado, o DKMS o assina com a sua chave MOK (*Machine Owner Key*). Se você nunca cadastrou uma, o
   sistema pede uma senha durante a instalação e a opção *Enroll MOK* no próximo boot (tela azul).
+- Opcional: `gir1.2-xapp-1.0` e `gir1.2-gtk-3.0` (o instalador tenta instalá-los), para o ícone na
+  bandeja; sem eles o vigia continua enviando as notificações.
 - Opcional: o driver da NVIDIA, para as leituras da GPU. Se o `thermald` ou o Intel DPTF estiver
   rodando, os limites dele aparecem na detecção de limitação pelos dispositivos de resfriamento.
 - Opcional: o **pacote do NitroSense para Windows** do seu modelo. Ele só serve para os arquivos
@@ -230,6 +234,21 @@ ver o que qualquer tecla envia: `sudo python3 -I tools/keyprobe.py 20` e aperte 
 registrar o atalho do GNOME de novo, como o seu usuário:
 `cd /opt/nitrosense && python3 -m nitrosense.shortcut install` (ou `remove` / `status`).
 
+### Ícone na bandeja
+O vigia (`nitrosense-watch`) mostra um ícone na bandeja do sistema (XApp StatusIcon: Cinnamon, MATE,
+XFCE e outros) que se atualiza a cada 5 s:
+- **Cor**: normal (roxo), com um ponto âmbar para **atenção** e vermelho para **crítico**, seguindo o
+  [alerta](#alertas) mais grave. Se o serviço ficar indisponível, o ponto âmbar aparece.
+- **Balão** (passe o mouse): temperatura, RPM e watts da CPU, temperatura da GPU (ou "GPU suspensa"), SSD,
+  bateria com a saúde e o alerta atual.
+- **Clique**: abre o NitroSense (ou traz a janela aberta para a frente).
+- **Menu** (botão direito): os mesmos números, o submenu **Ventoinha** (Automático / Máx / Curva), o
+  interruptor **Limitar a carga a 80%** (bloqueado durante uma calibração) e **Sair (para os alertas
+  também)**, que encerra o vigia.
+
+Para iniciar o vigia sem o ícone, use `nitrosense-watch --no-tray` ou a variável de ambiente
+`NITROSENSE_NO_TRAY=1`.
+
 ---
 
 ## Alertas
@@ -334,6 +353,7 @@ envolve a GPU): uma GPU quente está ocupada, então essas leituras não a imped
 | `nitrosense/history.py` | O histórico de 30 dias: arquivos JSON-lines por dia, agrupamento e resumos. |
 | `nitrosense/alerts.py` | As regras de alerta (uma função pura compartilhada pela janela e pelo vigia). |
 | `nitrosense/watcher.py` | O notificador em segundo plano (`nitrosense-watch`), que fala com o serviço de notificações por D-Bus. |
+| `nitrosense/tray.py` | O ícone na bandeja do vigia (XApp), com o tooltip, o menu e as regras de ícone por alerta. |
 | `nitrosense/power.py` | Planos de energia: governador da CPU, boost e power-profiles-daemon. |
 | `nitrosense/gui/window.py`, `widgets.py` | O painel e seus widgets (medidores, gráficos, o editor da curva) e o CSS. |
 | `nitrosense/extract.py`, `geometry.py`, `iconmaker.py` | Leem um pacote opcional do Windows (arte, ícone). `gui/controls.py`, `gui/theme.py` e `gui/lighting.py` são auxiliares e o painel de iluminação da janela original. |
@@ -365,6 +385,7 @@ O Windows troca esquemas de energia do Windows. O Linux não tem isso, então ca
 | `~/.config/nitrosense/gui.json` | preferências da interface por usuário (unidade, última aba, período do histórico) |
 | `/etc/systemd/system/nitrosensed.service` | unidade do serviço |
 | `/etc/xdg/autostart/nitrosense-watch.desktop` | inicia o vigia de alertas com a sessão do desktop |
+| `/usr/share/icons/hicolor/scalable/apps/nitrosense-tray*.svg` | os três ícones da bandeja (normal, atenção, crítico) |
 | `/etc/modules-load.d/nitrosense.conf` | carrega o `acpi_call` no boot |
 | `/usr/share/applications/io.github.napejoon.NitroSense.desktop` | entrada no menu (ID do app `io.github.napejoon.NitroSense`) |
 | `/etc/udev/hwdb.d/61-nitrosense.hwdb` | tecla NitroSense → `XF86Launch1` |
@@ -528,6 +549,10 @@ Depois de uma **atualização do kernel**, o DKMS recompila o módulo sozinho.
 serviço em execução é mais antigo que a janela. Rode o instalador de novo, ou copie os arquivos e
 `sudo systemctl restart nitrosensed`.
 
+**Sem ícone na bandeja**: confira se o painel tem o applet de bandeja (no Cinnamon, *Status XApp*), se
+o pacote `gir1.2-xapp-1.0` está instalado e se o vigia foi iniciado sem `--no-tray`. Sem a biblioteca, o
+vigia só envia notificações e escreve "tray icon unavailable" na saída.
+
 **Sem notificações do desktop**: confira se o vigia está rodando (`pgrep -f nitrosense-watch`) e se
 há um serviço de notificações na sua sessão. A janela só notifica por conta própria quando o vigia
 não está rodando.
@@ -582,7 +607,7 @@ usar.
 ## Desenvolvimento
 
 ```bash
-# testes unitários (125): encoders, serviço contra um firmware simulado, discos, bateria,
+# testes unitários (135): encoders, serviço contra um firmware simulado, discos, bateria,
 # histórico, RAPL, limitação, processos e a curva de ventoinha
 python3 -m unittest discover -s tests -v
 
