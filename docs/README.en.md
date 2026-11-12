@@ -50,7 +50,7 @@ The interface is in **Brazilian Portuguese**.
 | **Início** (Home) | CPU and GPU temperature gauges, fan RPM, power in watts, GPU load, the performance state (normal, or held back by heat or power) with the CPU clock, scenario summary, SSD and battery health at a glance. |
 | **Cenário** (Scenario) | Power plans for AC and battery, and fan control: **Auto**, **Max**, **Custom** (CPU and GPU sliders), **Curve** (a draggable temperature/speed graph with safety rules) and **CoolBoost**. |
 | **Discos** (Disks) | NVMe health from SMART: wear, spare capacity, power-on hours, data written and read, unsafe shutdowns, media errors, temperature, file-system use, plain-language advice. |
-| **Bateria** (Battery) | Health (full-charge capacity against the original), cycles, charge, power draw, time left, history charts, and a switch to **limit charging to about 80 %**. |
+| **Bateria** (Battery) | Health (full-charge capacity against the original), cycles, charge, power draw, time left, history charts, a switch to **limit charging to about 80 %** and the battery **calibration**. |
 | **Monitoramento** (Monitoring) | Live 12-minute charts of CPU and GPU temperature and load, with watts and clocks. |
 | **Processos** (Processes) | The heaviest programs by CPU, memory and GPU, and what keeps the discrete GPU awake. |
 | **Histórico** (History) | 1 hour to 30 days of temperatures, CPU and GPU power, CPU frequency with throttled periods marked, battery charge and draw, and the SSD wear trend. |
@@ -189,6 +189,13 @@ health trend use the history. **Limitar a carga a 80 %** switches the firmware's
 mode: charging stops near 80 %, which slows wear when the laptop stays plugged in. The service
 re-applies it after every boot and resume.
 
+**Battery calibration**: the firmware charges the battery to 100 %, discharges it and recharges it once,
+so the laptop relearns the real capacity (useful when the health looks too low for the cycle count).
+It takes several hours. **Iniciar calibração** asks for confirmation and works only with the charger
+connected. The firmware turns the 80 % limit off for the duration and the service turns it back on at
+the end. The tab shows the phase (charging, waiting, discharging, recharging) and the elapsed time, and
+**Cancelar calibração** stops it at any moment.
+
 ### Monitoramento (Monitoring)
 Live charts of the last 12 minutes (one sample per second) for the CPU and the GPU: temperature
 (purple line) and load (lilac area), with the current temperature, load, watts and clock in the
@@ -276,6 +283,14 @@ The service writes to firmware, so the risky features have guard rails.
 **Battery charge limit**: uses the same WMI interface as the `acer-wmi-battery` driver. The service
 reads the state back after every change and reports an error if the firmware did not accept it.
 `tools/probe_battery.py` is a read-only check for it.
+
+**Battery calibration**: starts only with the charger connected and after a confirmation. The firmware
+reports no progress and the `acer-wmi-battery` driver does not handle the end of the cycle, so the
+service follows it from the charge level and status: it counts the calibration as finished when the
+battery went down to 30 % or less and came back to 99 % or more. It stops it by itself at that point
+(and turns the 80 % limit back on if it was on), cancels it if the firmware gives up (for example when
+the charger is removed) and ends it after 16 hours as a safety net. The system may show low-battery
+warnings during the discharge.
 
 **Discrete GPU**: nothing in the app wakes it. NVML and `nvidia-smi` are used only while the PCI
 runtime status is *active*. The thermal-slowdown alert that works with the window closed asks NVML
@@ -389,7 +404,8 @@ c.request("set_fan", mode="auto")
 | `set_fan_curve` | `points`: 3–8 `[temperature, percent]` pairs (see [Safety](#safety)) |
 | `set_fan_speed` | `fan` cpu/gpu, `percent` 0–100 (Custom mode only) |
 | `set_coolboost` | `on` |
-| `set_battery_limit` | `on` (only if the firmware supports it) |
+| `set_battery_limit` | `on` (only if the firmware supports it; refused during a calibration) |
+| `start_battery_calibration` / `stop_battery_calibration` | none; starting needs the charger connected; the state is in `status` → `hw.battery_calibration` |
 | `set_keyboard` | `keyboard`: `mode` static/dynamic, `brightness` 1–5, `zones_on` [4 bools], `zone_colors` [4 × "#RRGGBB"], `effect` breathing/wave/zoom/shifting/neon, `speed` 1–9, `direction` 1/2, `effect_color` |
 | `set_lcd_overdrive` / `set_win_key` / `set_backlight_timeout` | `on` |
 | `set_power_plan` | `source` ac/battery, `plan` powersaver/balance/performance |
@@ -431,8 +447,8 @@ Battery health control, GUID `79772EC5-04B1-4BFD-843C-61E7F77B6CC9` (the interfa
 
 | ID | Method | Input (bytes) | Output |
 |---:|---|---|---|
-| 20 | GetBatteryHealth | `[battery 1, query 1, 0, 0]` | byte 0: supported functions (1 = health mode, 2 = calibration); byte 3: health mode on/off |
-| 21 | SetBatteryHealth | `[battery 1, function mask, status 0/1, 0 …]` (8 bytes) | 4 bytes; the service confirms by reading the state back |
+| 20 | GetBatteryHealth | `[battery 1, query 1, 0, 0]` | byte 0: supported functions (1 = health mode, 2 = calibration); byte 3: health mode on/off; byte 4: calibration on/off |
+| 21 | SetBatteryHealth | `[battery 1, function mask (1 = health mode, 2 = calibration), status 0/1, 0 …]` (8 bytes) | 4 bytes; the service confirms by reading the state back |
 
 Every output of the first two classes starts with a status byte (0 = success); the service treats
 any other value as an error. For the battery call the result is checked by reading the state back.
@@ -555,7 +571,7 @@ stays installed; remove it with `sudo apt remove acpi-call-dkms` if nothing else
 ## Development
 
 ```bash
-# unit tests (103): encoders, daemon against a simulated firmware, disks, battery, history,
+# unit tests (116): encoders, daemon against a simulated firmware, disks, battery, history,
 # RAPL, throttling, processes and the fan curve
 python3 -m unittest discover -s tests -v
 
