@@ -254,7 +254,7 @@ opções que o modelo suporta: **Usar somente a GPU dedicada**, **Overdrive da t
 A tecla com o logo do NitroSense envia o scancode AT `0xf5`, que o systemd mapeia para
 `KEY_PRESENTATION` (keycode 425). O X11 não entrega keycodes acima de 247, então o desktop nunca a
 vê. Por isso o instalador adiciona `/etc/udev/hwdb.d/61-nitrosense.hwdb`, que a remapeia para
-`prog1` (`XF86Launch1`), e registra um atalho personalizado do GNOME, *NitroSense*: `XF86Launch1` →
+`prog1` (`XF86Launch1`), e registra um atalho personalizado do GNOME ou do Cinnamon (Linux Mint), *NitroSense*: `XF86Launch1` →
 `/opt/nitrosense/bin/nitrosense`. Em outros desktops, associe `XF86Launch1` a esse comando. Para
 ver o que qualquer tecla envia: `sudo python3 -I tools/keyprobe.py 20` e aperte a tecla. Para
 registrar o atalho do GNOME de novo, como o seu usuário:

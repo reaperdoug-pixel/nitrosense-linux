@@ -257,7 +257,7 @@ model supports: **Use only the discrete GPU**, **LCD Overdrive** and **keyboard 
 The key with the NitroSense logo sends AT scancode `0xf5`, which systemd maps to
 `KEY_PRESENTATION` (keycode 425). X11 cannot deliver keycodes above 247, so the desktop never sees
 it. The installer therefore adds `/etc/udev/hwdb.d/61-nitrosense.hwdb`, which remaps it to
-`prog1` (`XF86Launch1`), and registers a GNOME custom shortcut *NitroSense*: `XF86Launch1` →
+`prog1` (`XF86Launch1`), and registers a GNOME or Cinnamon (Linux Mint) custom shortcut *NitroSense*: `XF86Launch1` →
 `/opt/nitrosense/bin/nitrosense`. On other desktops, bind `XF86Launch1` to that command yourself.
 To check what any key sends: `sudo python3 -I tools/keyprobe.py 20` and press it. To re-register
 the GNOME shortcut as your user: `cd /opt/nitrosense && python3 -m nitrosense.shortcut install`
