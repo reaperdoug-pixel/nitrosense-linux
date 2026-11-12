@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests (simulated firmware, no hardware needed)
+        run: python3 -m unittest discover -s tests -v
+      - name: Shell scripts parse
+        run: |
+          for f in install.sh uninstall.sh packaging/build-deb.sh packaging/debian/preinst \
+                   packaging/debian/postinst packaging/debian/prerm packaging/debian/postrm; do
+            bash -n "$f"
+          done
+      - name: Python compiles
+        run: python3 -m compileall -q nitrosense bin tools
+
+  deb:
+    runs-on: ubuntu-24.04
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y fakeroot
+      - name: Build the .deb
+        run: packaging/build-deb.sh
+      - name: Inspect the package
+        run: |
+          dpkg-deb -I dist/*.deb
+          dpkg-deb -c dist/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitrosense-deb
+          path: dist/*.deb
