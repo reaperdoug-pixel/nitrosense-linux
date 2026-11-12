@@ -185,11 +185,32 @@ def _seed_battery(d, now) -> None:
                                     "energy_design": 57.5, "cycles": cycles}], now - days * 86400)
 
 
+DEMO_SATA = [
+    {"name": "sda", "model": "WDC WD10SPZX-21Z", "firmware": "1A01", "size": 1_000_204_886_016,
+     "rotational": True, "transport": "sata"},
+    {"name": "sdb", "model": "Samsung SSD 860 EVO 500GB", "firmware": "RVT04B6Q", "size": 500_107_862_016,
+     "rotational": False, "transport": "sata"}]
+
+
+def seed_sata(d) -> None:
+    """Pretend two SATA disks (an HDD and an SSD with some wear) exist, for GUI demos."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from test_sata import attr, smartctl_json
+    from nitrosense import sata
+    hdd = smartctl_json(rpm=5400, hours=47000, temp=41, attrs=[
+        attr(5, "Reallocated_Sector_Ct", 98, 6), attr(197, "Current_Pending_Sector", 100, 0)])
+    ssd = smartctl_json(rpm=0, hours=9200, temp=36,
+                        attrs=[attr(177, "Wear_Leveling_Count", 94, 60)])
+    d._sata_cache = {"sda": sata.parse(hdd), "sdb": sata.parse(ssd)}
+
+
 def main() -> None:
     sock = sys.argv[1] if len(sys.argv) > 1 else os.path.join(tempfile.gettempdir(), "ns-test.sock")
     d = make_daemon()
     if os.environ.get("NITROSENSE_FAKE_HISTORY"):
         seed_history(d)
+    if os.environ.get("NITROSENSE_FAKE_SATA"):
+        seed_sata(d)
     if os.environ.get("NITROSENSE_FAKE_THROTTLE"):  # pretend thermald is holding the CPU back
         d.throttle._cooling_states = lambda: {"processor": 2, "powerclamp": 0, "tcc": 8}
     d.start_throttle_monitor(1.0)

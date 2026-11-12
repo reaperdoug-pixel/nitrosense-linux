@@ -31,6 +31,7 @@ from . import model as model_cfg
 from . import set_process_name
 from . import power
 from . import procs
+from . import sata
 from . import throttle
 from .rapl import Rapl
 from .sysmon import CpuLoad, GpuMonitor, gpu_throttle
@@ -104,6 +105,7 @@ class Daemon:
         self._sensor_cache: tuple[float, dict] = (0.0, {})
         self._smart_cache: tuple[float, dict] = (-1e9, {})
         self._holders_cache: tuple[float, list] = (-1e9, [])
+        self._sata_cache: dict = {}   # refreshed by a background thread, never by a request
         self.recorder: history.Recorder | None = None
         self._stop = threading.Event()
         self._cpu_load = None
@@ -314,15 +316,38 @@ class Daemon:
         """NVMe SMART data (needs root, so only the service can read it); cached for 10 s."""
         now = time.monotonic()
         ts, cached = self._smart_cache
-        if now - ts < 10:
-            return cached
+        if now - ts >= 10:
+            try:
+                cached = disks.read_smart()
+            except Exception as e:  # never let a disk problem break the hardware service
+                log.warning("disk SMART read failed: %s", e)
+                cached = {}
+            self._smart_cache = (now, cached)
+        return {**cached, **self._sata_cache}
+
+    def sata_refresh(self) -> None:
+        """Read SATA/SAS/USB disks through smartctl (slow, so only from the background thread).
+
+        A disk that is asleep keeps its last known data, flagged as standby."""
         try:
-            data = disks.read_smart()
-        except Exception as e:  # never let a disk problem break the hardware service
-            log.warning("disk SMART read failed: %s", e)
-            data = {}
-        self._smart_cache = (now, data)
-        return data
+            new = sata.read_all()
+        except Exception as e:
+            log.warning("SATA SMART read failed: %s", e)
+            return
+        merged = {}
+        for name, res in new.items():
+            prev = self._sata_cache.get(name)
+            if res.get("standby") and prev and "error" not in prev and not prev.get("standby_only"):
+                res = dict(prev, standby=True)
+            merged[name] = res
+        self._sata_cache = merged
+
+    def start_sata_monitor(self, interval: float = 120.0) -> None:
+        def loop() -> None:
+            self.sata_refresh()
+            while not self._stop.wait(interval):
+                self.sata_refresh()
+        threading.Thread(target=loop, name="sata", daemon=True).start()
 
     def holders(self) -> list:
         """Programs holding /dev/nvidia* open (root sees every user's); cached for 3 s."""
@@ -771,6 +796,7 @@ def main() -> int:
     d.startup()
     d.start_throttle_monitor()
     d.start_calibration_monitor()
+    d.start_sata_monitor()
     d.start_fan_curve()
     d.start_recorder()
 

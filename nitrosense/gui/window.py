@@ -564,7 +564,11 @@ class MainWindow(Gtk.ApplicationWindow):
         titles.set_hexpand(True)
         titles.append(_lbl(d["model"], "ns-mid"))
         size = disks.human_bytes(d["size"]) if d["size"] else "?"
-        titles.append(_lbl(f"{d['name']} · {size} · firmware {d['firmware']}", "ns-dim"))
+        if d.get("kind") == "sata":
+            kind = ("HDD" if d.get("rotational") else "SSD") + " " + d.get("transport", "sata").upper()
+            titles.append(_lbl(f"{d['name']} · {size} · {kind} · firmware {d['firmware']}", "ns-dim"))
+        else:
+            titles.append(_lbl(f"{d['name']} · {size} · firmware {d['firmware']}", "ns-dim"))
         head.append(titles)
         ui["chip"] = _lbl("--", "ns-chip")
         ui["chip"].set_valign(Gtk.Align.CENTER)
@@ -574,11 +578,18 @@ class MainWindow(Gtk.ApplicationWindow):
         grid = Gtk.Grid(column_spacing=8, row_spacing=8)
         grid.set_column_homogeneous(True)
         ui["tiles"] = {}
-        for i, (key, title) in enumerate((
-                ("temp", "Temperatura"), ("used", "Desgaste"), ("spare", "Reserva de células"),
-                ("hours", "Tempo ligado"), ("written", "Dados gravados"), ("read", "Dados lidos"),
-                ("cycles", "Ciclos de energia"), ("unsafe", "Desligamentos inesperados"),
-                ("errors", "Erros de integridade"))):
+        if d.get("kind") == "sata":
+            tiles = (("temp", "Temperatura"), ("rpm", "Rotação"), ("hours", "Tempo ligado"),
+                     ("cycles", "Ciclos de energia"), ("realloc", "Setores realocados"),
+                     ("pending", "Setores pendentes"), ("uncorr", "Erros incorrigíveis"),
+                     ("crc", "Erros de CRC (cabo)"),
+                     ("used", "Desgaste") if not d.get("rotational") else ("test", "Último autoteste"))
+        else:
+            tiles = (("temp", "Temperatura"), ("used", "Desgaste"), ("spare", "Reserva de células"),
+                     ("hours", "Tempo ligado"), ("written", "Dados gravados"), ("read", "Dados lidos"),
+                     ("cycles", "Ciclos de energia"), ("unsafe", "Desligamentos inesperados"),
+                     ("errors", "Erros de integridade"))
+        for i, (key, title) in enumerate(tiles):
             tile = _box(Gtk.Orientation.VERTICAL, 2, "ns-tile")
             tile.append(_lbl(title, "ns-dim"))
             val = _lbl("--", "ns-mid")
@@ -631,11 +642,33 @@ class MainWindow(Gtk.ApplicationWindow):
             ui = self.disk_ui.get(d["name"])
             if not ui:
                 continue
-            ui["hist"].push(d["temp"], None)
+            temp = d["temp"]
+            if temp is None and smart and smart.get("temperature_c") is not None:
+                temp = smart["temperature_c"]  # SATA disks: the service's smartctl reading
+            ui["hist"].push(temp, None)
             self._set_chip(ui["chip"], a["level"], a["label"])
             t = ui["tiles"]
-            t["temp"].set_label(f"{_conv(d['temp'], unit)}°{unit}")
-            if smart:
+            t["temp"].set_label(f"{_conv(temp, unit)}°{unit}")
+            if smart and smart.get("ata"):
+                num = lambda v: "--" if v is None else f"{v:,}".replace(",", ".")  # noqa: E731
+                if "rpm" in t:
+                    t["rpm"].set_label(f"{smart['rotation_rpm']} RPM" if smart.get("rotation_rpm")
+                                       else ("SSD" if not d.get("rotational") else "--"))
+                t["hours"].set_label("--" if smart.get("power_on_hours") is None
+                                     else num(smart["power_on_hours"]) + " h")
+                t["cycles"].set_label(num(smart.get("power_cycles")))
+                t["realloc"].set_label(num(smart.get("reallocated")))
+                t["pending"].set_label(num(smart.get("pending")))
+                t["uncorr"].set_label(num(smart.get("uncorrectable")))
+                t["crc"].set_label(num(smart.get("crc_errors")))
+                if "used" in t:
+                    t["used"].set_label("--" if smart.get("percentage_used") is None
+                                        else f"{smart['percentage_used']}%")
+                if "test" in t:
+                    test = smart.get("last_self_test")
+                    t["test"].set_label("nenhum" if not test else
+                                        ("passou" if test.get("passed") else "falhou"))
+            elif smart:
                 t["used"].set_label(f"{smart['percentage_used']}%")
                 t["spare"].set_label(f"{smart['available_spare']}%")
                 t["hours"].set_label(f"{smart['power_on_hours']:,} h".replace(",", "."))
@@ -662,7 +695,15 @@ class MainWindow(Gtk.ApplicationWindow):
             lines.append(a["advice"])
             if a["life"]:
                 lines.append(a["life"])
-            if not smart:
+            if smart and smart.get("standby"):
+                lines.append("Disco em repouso (standby): os dados SMART são da última leitura, para "
+                             "não acordá-lo.")
+            if not smart and raw and raw.get("missing_tool"):
+                lines.append("Para ler a saúde deste disco instale o smartmontools: "
+                             "sudo apt install smartmontools (o serviço tenta de novo sozinho).")
+            elif not smart and raw and d.get("kind") == "sata":
+                lines.append(f"Dados SMART indisponíveis para este disco: {raw.get('error', '')}")
+            elif not smart:
                 lines.append("Dados SMART indisponíveis: o serviço do NitroSense não respondeu "
                              "ao pedido de discos (ele precisa estar atualizado e rodando).")
             ui["advice"].set_label("\n".join(lines))

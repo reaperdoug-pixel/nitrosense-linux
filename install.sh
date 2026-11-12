@@ -31,6 +31,8 @@ echo "==> Installing dependencies"
 apt-get install -y python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-4.0 acpi-call-dkms
 # optional: the tray icon of the alert watcher (without them the watcher still notifies)
 apt-get install -y gir1.2-gtk-3.0 gir1.2-xapp-1.0 || echo "    tray icon libraries not installed (optional)"
+# optional: SMART for SATA/HDD disks (NVMe is read natively and needs nothing)
+apt-get install -y smartmontools || echo "    smartmontools not installed (optional: SATA/HDD health)"
 
 echo "==> Loading acpi_call (signed by DKMS with your enrolled MOK key)"
 if ! modprobe acpi_call; then

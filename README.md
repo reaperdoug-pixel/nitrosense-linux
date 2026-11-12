@@ -47,7 +47,7 @@ está em **português do Brasil**.
 |---|---|
 | **Início** | Medidores de temperatura da CPU e da GPU, RPM das ventoinhas, consumo em watts, carga da GPU, o estado do desempenho (normal, ou limitado por calor ou potência) com o clock da CPU, resumo do cenário, saúde do SSD e da bateria num relance. |
 | **Cenário** | Planos de energia para tomada e bateria e o controle de ventoinha: **Automático**, **Máx**, **Personalizado** (controles da CPU e da GPU), **Curva** (um gráfico de temperatura por velocidade, arrastável, uma para as duas ventoinhas ou uma para cada, com regras de segurança) e **CoolBoost**. |
-| **Discos** | Saúde do NVMe pelo SMART: desgaste, reserva de células, horas ligado, dados gravados e lidos, desligamentos inesperados, erros de integridade, temperatura, espaço em uso e conselhos em linguagem simples. |
+| **Discos** | Saúde de NVMe, **SATA e HDD** pelo SMART: desgaste, reserva de células, setores defeituosos, rotação do HDD, horas ligado, dados gravados e lidos, desligamentos inesperados, erros de integridade, temperatura, espaço em uso e conselhos em linguagem simples, com o aviso de quando trocar. |
 | **Bateria** | Saúde (capacidade atual contra a original), ciclos, carga, consumo, autonomia, gráficos de histórico e um interruptor para **limitar a carga a cerca de 80%** e a **calibração** da bateria. |
 | **Monitoramento** | Gráficos ao vivo dos últimos 12 minutos de temperatura e carga da CPU e da GPU, com watts e clocks. |
 | **Processos** | Os programas que mais pesam em CPU, memória e GPU, e o que mantém a GPU dedicada acordada. |
@@ -84,7 +84,7 @@ O que depende do hardware:
 | Controle de ventoinha, sensores, CoolBoost, planos de energia | Os métodos WMI da Acer (`AcerGamingFunction`) e o módulo `acpi_call` |
 | Consumo da CPU em watts | Contadores RAPL da Intel em `/sys/class/powercap` (Intel; AMD não testado) |
 | Detecção de limitação da CPU | Contadores `thermal_throttle` do kernel e dispositivos de resfriamento térmico (Intel) |
-| Saúde do disco | Um **NVMe** (discos SATA não são cobertos) |
+| Saúde do disco | **NVMe** (leitura nativa) ou **SATA/SAS/USB**, HDD ou SSD (pelo pacote `smartmontools`) |
 | Potência, clock e motivos de redução da GPU | Uma GPU NVIDIA com o driver proprietário (`libnvidia-ml`) |
 | Uso da GPU por programa | `nvidia-smi` |
 | Limite de carga da bateria | A interface WMI de saúde da bateria da Acer (GUID `79772EC5-…`); o interruptor só aparece se o firmware a reportar |
@@ -108,6 +108,8 @@ confira se as temperaturas e os RPM que ela mostra parecem certos.
 - **Secure Boot**: o `acpi_call` é um módulo de fora do kernel, compilado pelo DKMS. Com Secure Boot
   ligado, o DKMS o assina com a sua chave MOK (*Machine Owner Key*). Se você nunca cadastrou uma, o
   sistema pede uma senha durante a instalação e a opção *Enroll MOK* no próximo boot (tela azul).
+- Opcional: `smartmontools` (o instalador tenta instalá-lo), para ler a saúde de discos SATA/HDD; o NVMe
+  não precisa dele.
 - Opcional: `gir1.2-xapp-1.0` e `gir1.2-gtk-3.0` (o instalador tenta instalá-los), para o ícone na
   bandeja; sem eles o vigia continua enviando as notificações.
 - Opcional: o driver da NVIDIA, para as leituras da GPU. Se o `thermald` ou o Intel DPTF estiver
@@ -183,6 +185,13 @@ Para cada NVMe: um selo de saúde (Saudável / Atenção / Crítico), temperatur
 células, horas, dados gravados e lidos, ciclos de energia, desligamentos inesperados, erros de
 integridade, um gráfico de temperatura dos últimos 12 minutos, espaço em uso e conselhos. O SMART
 exige root, então quem lê é o serviço.
+
+Discos **SATA, SAS e USB** (HDD e SSD) também aparecem, lidos pelo `smartctl` (pacote `smartmontools`).
+Para um HDD o cartão mostra a rotação (por exemplo, 5400 RPM, o valor nominal do disco), setores
+realocados, pendentes e incorrigíveis, erros de CRC (cabo) e o resultado do último autoteste; para um SSD
+SATA, o desgaste quando o disco o informa. O serviço **nunca acorda um HDD em repouso**: ele usa
+`smartctl -n standby` e, com o disco dormindo, mantém os dados da última leitura e avisa. A leitura é
+feita a cada 2 minutos em segundo plano. Sem o `smartmontools`, o cartão mostra como instalá-lo.
 
 ### Bateria
 A saúde é a capacidade de carga completa contra a capacidade de projeto, lida de
@@ -267,6 +276,8 @@ quieta, para você nunca receber duplicado.
 | GPU reduzindo por calor | 10 s seguidos ou mais (informado pelo NVML) | |
 | Desgaste do SSD | 80% ou mais | 100% |
 | Reserva de células do SSD | abaixo de 50% | no limite do disco ou abaixo |
+| HDD/SATA: setores defeituosos | realocados, pendentes ou incorrigíveis: 1 ou mais | 100 ou mais realocados; 10 ou mais pendentes ou incorrigíveis |
+| HDD/SATA: SMART | autoteste falhou, atributo que já esteve abaixo do limite, HDD com 5 anos ou mais ligado | SMART reprovado ou atributo abaixo do limite agora |
 | Sinalizadores críticos do SSD | falha no backup de memória volátil | reserva, confiabilidade ou somente leitura |
 | Erros de integridade do SSD | 1 ou mais | 10 ou mais |
 | Temperatura do SSD | a menos de 10 °C do limite de aviso do disco | nesse limite |
@@ -344,7 +355,8 @@ envolve a GPU): uma GPU quente está ocupada, então essas leituras não a imped
 | `nitrosense/wmi.py` | Resolve o caminho ACPI pelo sysfs e chama só os 15 métodos permitidos, cada um com tamanho de entrada fixo. |
 | `nitrosense/controller.py` | Sequências de chamadas (modos de ventoinha, iluminação, limite da bateria, …). |
 | `nitrosense/fancurve.py` | A curva de ventoinha: validação, interpolação e a máquina de estados de segurança. |
-| `nitrosense/disks.py` | SMART do NVMe pelo ioctl de administração, avaliação de saúde e conselhos. |
+| `nitrosense/disks.py` | SMART do NVMe pelo ioctl de administração, avaliação de saúde (NVMe e ATA) e conselhos. |
+| `nitrosense/sata.py` | Discos SATA/SAS/USB pelo `smartctl -j`: descoberta, leitura sem acordar disco em repouso e normalização dos atributos. |
 | `nitrosense/battery.py` | Leitura da bateria, avaliação de saúde, tempo restante. |
 | `nitrosense/rapl.py` | Consumo da CPU em watts a partir dos contadores de energia RAPL. |
 | `nitrosense/throttle.py` | Detecção de limitação da CPU por contadores do kernel e dispositivos de resfriamento. |
@@ -515,7 +527,8 @@ que o git ignora).
   serviço monta a entrada do firmware por conta própria; os clientes nunca enviam valores WMI
   brutos.
 - Só 15 métodos WMI conhecidos podem ser chamados, cada um com tamanho de entrada fixo. Comandos
-  desconhecidos são rejeitados.
+  desconhecidos são rejeitados. O `smartctl` é chamado sem shell, só para nomes de disco `sd[a-z]`
+  vindos do sysfs, com tempo limite.
 - O `acpi_call` pode chamar qualquer método ACPI, mas só o root usa o `/proc/acpi/call`.
 - O histórico fica em `/var/lib/nitrosense/history/` como arquivos comuns legíveis por todos os
   usuários locais; ele só contém leituras de sensores.
@@ -548,6 +561,10 @@ Depois de uma **atualização do kernel**, o DKMS recompila o módulo sozinho.
 **Uma aba diz que o serviço está desatualizado** (histórico, SMART, watts ou `gpu_holders` vazios): o
 serviço em execução é mais antigo que a janela. Rode o instalador de novo, ou copie os arquivos e
 `sudo systemctl restart nitrosensed`.
+
+**Disco SATA sem dados SMART**: instale o `smartmontools` (`sudo apt install smartmontools`); o serviço tenta
+de novo sozinho a cada 2 minutos. Alguns adaptadores USB não repassam o SMART, e o cartão mostra o motivo
+que o `smartctl` deu. Um HDD em repouso mostra os dados da última leitura até acordar por conta própria.
 
 **Sem ícone na bandeja**: confira se o painel tem o applet de bandeja (no Cinnamon, *Status XApp*), se
 o pacote `gir1.2-xapp-1.0` está instalado e se o vigia foi iniciado sem `--no-tray`. Sem a biblioteca, o
@@ -607,7 +624,7 @@ usar.
 ## Desenvolvimento
 
 ```bash
-# testes unitários (135): encoders, serviço contra um firmware simulado, discos, bateria,
+# testes unitários (156): encoders, serviço contra um firmware simulado, discos, bateria,
 # histórico, RAPL, limitação, processos e a curva de ventoinha
 python3 -m unittest discover -s tests -v
 
@@ -619,7 +636,8 @@ NITROSENSE_SOCKET=/tmp/ns.sock ./bin/nitrosense
 O `tests/fake_hw.py` simula o firmware (os modos de ventoinha mudam o RPM, as temperaturas variam),
 os dados SMART e a potência da CPU. Variáveis para demonstrações: `NITROSENSE_FAKE_HISTORY=1` enche
 sete dias de histórico, `NITROSENSE_FAKE_WEAR=<percentual>` define o desgaste do SSD e
-`NITROSENSE_FAKE_THROTTLE=1` finge que a CPU está sendo contida.
+`NITROSENSE_FAKE_THROTTLE=1` finge que a CPU está sendo contida e `NITROSENSE_FAKE_SATA=1` finge um HDD e
+um SSD SATA.
 
 A janela é um aplicativo de instância única. Para abrir uma segunda cópia ao lado de uma instalada,
 inicie-a no seu próprio barramento de sessão e com a sua própria configuração:
@@ -663,7 +681,10 @@ original.
 - **Iluminação do teclado**: o serviço e a API suportam (e o firmware do ANV15-51 rejeita o
   comando), mas o painel não tem tela de iluminação. O painel da janela original continua em
   `nitrosense/gui/lighting.py`, sem uso.
-- **Discos**: só NVMe; saúde de SATA/HDD exigiria o `smartmontools`.
+- **Discos**: NVMe e SATA/SAS/USB; discos atrás de RAID por hardware ou de LVM/criptografia mostram a
+  saúde do disco físico, mas o espaço em uso só aparece para partições montadas diretamente. O suporte a
+  SATA/HDD foi escrito a partir de saídas reais do `smartctl`, mas não foi testado num disco SATA de
+  verdade (o notebook de desenvolvimento só tem NVMe).
 - **Sensores voltados à Intel**: os watts da CPU e a detecção de limitação usam interfaces da Intel;
   AMD não foi testado.
 - **Dados da GPU**: só enquanto a GPU dedicada já está acordada; o uso da GPU por programa exige o

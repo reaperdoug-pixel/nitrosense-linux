@@ -6,7 +6,8 @@ Three layers:
   * assess()     pure function turning both into a level (0 ok, 1 attention, 2 critical)
                  with reasons and advice in Portuguese
 
-Only NVMe is covered; SATA drives would need smartmontools.
+NVMe drives are read natively; SATA/SAS/USB drives (HDD and SSD) come from smartmontools through
+nitrosense/sata.py and are assessed here too (the ATA rules at the end of this file).
 """
 
 from __future__ import annotations
@@ -15,7 +16,10 @@ import ctypes
 import fcntl
 import glob
 import os
+import re
 import struct
+
+from . import sata
 
 SYS_NVME = "/sys/class/nvme"
 NVME_IOCTL_ADMIN_CMD = 0xC0484E41  # _IOWR('N', 0x41, struct nvme_admin_cmd), 72 bytes
@@ -108,8 +112,9 @@ def _milli(path: str) -> float | None:
         return None
 
 
-def _mounts(ctrl: str) -> list[dict]:
-    """Filesystems living on this controller's partitions, with their usage."""
+def _mounts(ctrl: str, kind: str = "nvme") -> list[dict]:
+    """Filesystems living on this disk's partitions, with their usage."""
+    pattern = re.compile(rf"^/dev/{ctrl}n\d+(p\d+)?$" if kind == "nvme" else rf"^/dev/{ctrl}\d*$")
     out = []
     try:
         with open("/proc/mounts") as f:
@@ -118,7 +123,7 @@ def _mounts(ctrl: str) -> list[dict]:
         return out
     for line in lines:
         parts = line.split()
-        if len(parts) < 2 or not parts[0].startswith(f"/dev/{ctrl}n"):
+        if len(parts) < 2 or not pattern.match(parts[0]):
             continue
         try:
             st = os.statvfs(parts[1])
@@ -159,6 +164,7 @@ def basic() -> list[dict]:
                 size = None
         disks.append({
             "name": name,
+            "kind": "nvme",
             "model": _read(os.path.join(path, "model")) or name,
             "firmware": _read(os.path.join(path, "firmware_rev")) or "",
             "size": size,
@@ -167,6 +173,14 @@ def basic() -> list[dict]:
             "temp_crit": _milli(os.path.join(hw, "temp1_crit")) if hw else None,
             "mounts": _mounts(name),
         })
+    for dev in sata.list_devices():
+        disks.append({
+            "name": dev["name"], "kind": "sata", "model": dev["model"], "firmware": dev["firmware"],
+            "size": dev["size"], "temp": sata.drivetemp(dev["name"]),
+            # spinning disks run cooler by design: attention at 50 C, critical at 60 C
+            "temp_warn": 60.0 if dev["rotational"] else None, "temp_crit": None,
+            "mounts": _mounts(dev["name"], "sata"), "rotational": dev["rotational"],
+            "transport": dev["transport"]})
     return disks
 
 
@@ -195,7 +209,9 @@ def assess(disk: dict, smart: dict | None) -> dict:
             reasons.append((CRIT, f"Temperatura muito alta: {temp:.0f} °C (limite de aviso do disco {warn:.0f} °C)."))
         elif temp >= warn - 10:
             reasons.append((WARN, f"Temperatura elevada: {temp:.0f} °C."))
-    if smart and "error" not in smart:
+    if smart and "error" not in smart and smart.get("ata"):
+        reasons += _ata_reasons(disk, smart)
+    elif smart and "error" not in smart:
         cw = smart["critical_warning"]
         if cw & 0x01:
             reasons.append((CRIT, "O disco avisa que a reserva de células está abaixo do limite."))
@@ -230,9 +246,63 @@ def assess(disk: dict, smart: dict | None) -> dict:
     advice = {OK: "Tudo certo. Nada a fazer.",
               WARN: "Fique de olho e mantenha backup em dia.",
               CRIT: "Faça backup agora e considere trocar o disco."}[level]
-    life = life_estimate(smart) if smart and "error" not in smart else ""
+    life = ""
+    if smart and "error" not in smart:
+        life = ata_life(disk, smart) if smart.get("ata") else life_estimate(smart)
     return {"level": level, "label": LABELS[level], "reasons": reasons, "advice": advice,
             "life": life}
+
+
+# ------------------------------------------------------------ ATA (SATA / SAS / USB)
+HDD_OLD_HOURS = 5 * 365 * 24   # a spinning disk past five years of power-on time deserves a backup
+
+
+def _ata_reasons(disk: dict, smart: dict) -> list[tuple[int, str]]:
+    r: list[tuple[int, str]] = []
+    if smart.get("passed") is False:
+        r.append((CRIT, "O disco reportou falha no teste de saúde SMART: troque-o."))
+    for name in smart.get("failing", []):
+        r.append((CRIT, f"O atributo {name} está abaixo do limite do fabricante."))
+    for name in smart.get("failed_before", []):
+        r.append((WARN, f"O atributo {name} já esteve abaixo do limite do fabricante."))
+
+    def count(key, label, crit_at):
+        n = smart.get(key)
+        if n:
+            r.append((CRIT if n >= crit_at else WARN, f"{n} {label}."))
+    count("reallocated", "setor(es) realocado(s) por defeito", 100)
+    count("pending", "setor(es) pendente(s) de realocação", 10)
+    count("uncorrectable", "setor(es) com erro incorrigível", 10)
+    count("reported_uncorrect", "erro(s) de leitura incorrigível(is) informado(s)", 10)
+    if smart.get("crc_errors"):
+        r.append((WARN, f"{smart['crc_errors']} erro(s) de comunicação (CRC): confira o cabo ou a conexão."))
+    if smart.get("spin_retry"):
+        r.append((WARN, f"O disco precisou tentar girar de novo {smart['spin_retry']} vez(es)."))
+    used = smart.get("percentage_used")
+    if used is not None:
+        if used >= 100:
+            r.append((CRIT, f"Desgaste em {used}%: vida útil nominal esgotada."))
+        elif used >= 80:
+            r.append((WARN, f"Desgaste em {used}%: planeje a troca."))
+    test = smart.get("last_self_test")
+    if test and test.get("passed") is False:
+        r.append((WARN, f"O último autoteste do disco ({test.get('type') or 'SMART'}) falhou."))
+    hours = smart.get("power_on_hours")
+    if disk.get("rotational") and hours and hours >= HDD_OLD_HOURS:
+        r.append((WARN, f"Disco com {hours / 8760:.1f} anos ligado: mantenha o backup em dia e "
+                        "planeje a troca."))
+    return r
+
+
+def ata_life(disk: dict, smart: dict) -> str:
+    if smart.get("percentage_used") is not None:
+        return life_estimate({"percentage_used": smart["percentage_used"],
+                              "power_on_hours": smart.get("power_on_hours") or 0})
+    hours = smart.get("power_on_hours")
+    if not hours:
+        return ""
+    kind = "HDDs costumam durar de 4 a 6 anos de uso" if disk.get("rotational") else "SSDs duram em média mais"
+    return f"Tempo ligado: {hours / 8760:.1f} ano(s) ({hours:,} h). {kind}.".replace(",", ".")
 
 
 def human_bytes(n: float) -> str:

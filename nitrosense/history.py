@@ -71,10 +71,11 @@ class Recorder:
             return False
         row = {"t": int(t)}
         for name, s in smart.items():
-            if isinstance(s, dict) and "error" not in s and "percentage_used" in s:
-                row[name] = {k: s[k] for k in ("percentage_used", "bytes_written", "bytes_read",
-                                               "power_on_hours", "unsafe_shutdowns",
-                                               "media_errors", "available_spare")}
+            keys = ("percentage_used", "bytes_written", "bytes_read", "power_on_hours",
+                    "unsafe_shutdowns", "media_errors", "available_spare")
+            # only NVMe drives report all of these (ATA ones have their own, different counters)
+            if isinstance(s, dict) and "error" not in s and not s.get("ata") and all(k in s for k in keys):
+                row[name] = {k: s[k] for k in keys}
         if len(row) == 1:
             return False
         self._last_smart = t
