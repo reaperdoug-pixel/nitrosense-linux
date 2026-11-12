@@ -1,6 +1,7 @@
 > Thai guide from the upstream project ([napejoon/nitrosense-linux](https://github.com/napejoon/nitrosense-linux)).
 > It describes the original Windows-style window. This fork replaced it with a dashboard and no
-> longer needs the Windows package: see the [main README](../README.md).
+> longer needs the Windows package: see the main README, in Portuguese ([README.md](../README.md)),
+> or its English version ([README.en.md](README.en.md)).
 
 # คู่มือภาษาไทย
 
@@ -42,7 +43,7 @@ Windows ทำโดยแกะจากตัวโปรแกรม Windows 
 ### แก้ปัญหาเบื้องต้น
 - ขึ้น *"NitroSense service is not running"* → `sudo systemctl restart nitrosensed` แล้วดู log ด้วย `journalctl -u nitrosensed -b`
 - ขึ้น *"acpi_call kernel module is not loaded"* → `sudo modprobe acpi_call` ถ้าไม่ผ่านให้เช็ก Secure Boot/MOK
-- กด**ปุ่ม NitroSense แล้วไม่มีอะไรเกิดขึ้น** → ดูหัวข้อ [NitroSense key](../README.md#the-nitrosense-key) (installer ตั้งค่าให้อัตโนมัติ: เปลี่ยน scancode `0xf5` เป็น `XF86Launch1` แล้วสร้าง shortcut ของ GNOME ไว้)
+- กด**ปุ่ม NitroSense แล้วไม่มีอะไรเกิดขึ้น** → ดูหัวข้อ [NitroSense key](../README.md#a-tecla-nitrosense) (installer ตั้งค่าให้อัตโนมัติ: เปลี่ยน scancode `0xf5` เป็น `XF86Launch1` แล้วสร้าง shortcut ของ GNOME ไว้)
 - **ตั้งไฟคีย์บอร์ดแล้วดูเหมือนไม่เปลี่ยน** → ไฟคีย์บอร์ดของโน้ตบุ๊กจะดับเองถ้าไม่ได้กดคีย์บอร์ด*ตัวเครื่อง*สักพัก (พิมพ์จากคีย์บอร์ดภายนอกไม่นับ) ให้กดปุ่มอะไรก็ได้บนคีย์บอร์ดโน้ตบุ๊กแล้วดูใหม่ หรือรัน `python3 -I tools/kbtest.py` เพื่อทดสอบทีละโหมด
 - LCD Overdrive และ "ปิดไฟคีย์บอร์ดหลัง 30 วินาที" ไม่มีบน AN515-44 (จอ/BIOS ไม่รองรับ) โปรแกรมจึงซ่อนตัวเลือกนี้ไว้ เหมือนบน Windows
 - ขึ้น *"permission denied"* → `echo ชื่อผู้ใช้ | sudo tee -a /etc/nitrosense/allowed-users`
