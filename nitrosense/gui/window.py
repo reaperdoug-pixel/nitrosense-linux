@@ -935,6 +935,31 @@ class MainWindow(Gtk.ApplicationWindow):
         ui["limit_card"] = limit
         page.append(limit)
 
+        calib = _card(8)
+        row = _box(Gtk.Orientation.HORIZONTAL, 12)
+        txt = _box(Gtk.Orientation.VERTICAL, 3)
+        txt.set_hexpand(True)
+        txt.append(_lbl("Calibração da bateria", "ns-mid"))
+        desc = _lbl("A bateria carrega até 100%, descarrega e recarrega uma vez para o notebook "
+                    "reaprender a capacidade real. Pode levar várias horas. Útil quando a saúde "
+                    "parece baixa demais para os ciclos ou a carga salta de repente.", "ns-dim")
+        desc.set_wrap(True)
+        txt.append(desc)
+        row.append(txt)
+        ui["cal_button"] = Gtk.Button(label="Iniciar calibração")
+        ui["cal_button"].add_css_class("ns-seg")
+        ui["cal_button"].set_valign(Gtk.Align.CENTER)
+        ui["cal_button"].connect("clicked", self._calibration_clicked)
+        row.append(ui["cal_button"])
+        calib.append(row)
+        ui["cal_status"] = _lbl("", xalign=0.0)
+        ui["cal_status"].set_wrap(True)
+        calib.append(ui["cal_status"])
+        calib.set_visible(False)
+        ui["cal_card"] = calib
+        page.append(calib)
+        self._cal: dict = {}
+
         self.bat_charts = {}
         for key, title, kw in (("bat", "Carga da bateria", {"suffix": "%", "mode": "percent"}),
                                ("pw", "Consumo da bateria (watts)", {"suffix": " W", "mode": "zero"})):
@@ -1446,6 +1471,59 @@ class MainWindow(Gtk.ApplicationWindow):
                "Limite de carga desligado: a bateria volta a carregar até 100%.")
         self._send("set_battery_limit", after=lambda _r: self._show_status(msg, error=False), on=on)
 
+    def _calibration_clicked(self, _button) -> None:
+        if self._cal.get("active") or self._cal.get("external"):
+            self._send("stop_battery_calibration")
+            return
+        dialog = Gtk.AlertDialog(
+            message="Iniciar a calibração da bateria?",
+            detail=("A bateria vai carregar até 100%, descarregar quase por completo e recarregar. "
+                    "Pode levar várias horas.\n\n"
+                    "Mantenha o carregador ligado, não suspenda o notebook e evite tarefas pesadas. "
+                    "O sistema pode mostrar avisos de bateria fraca durante a descarga. "
+                    "O limite de 80% fica desligado e volta sozinho no fim. "
+                    "Se o carregador sair da tomada, a calibração é interrompida."),
+            buttons=["Iniciar", "Cancelar"], cancel_button=1, default_button=1)
+
+        def done(dlg, res):
+            try:
+                choice = dlg.choose_finish(res)
+            except GLib.Error:
+                choice = 1
+            if choice == 0:
+                self._send("start_battery_calibration")
+
+        dialog.choose(self, None, done)
+
+    def _update_calibration(self) -> None:
+        cal = self._cal
+        ui = self.bat_ui
+        ui["cal_card"].set_visible(bool(cal.get("supported")))
+        if not cal.get("supported"):
+            return
+        active, external = bool(cal.get("active")), bool(cal.get("external"))
+        button = ui["cal_button"]
+        button.set_label("Cancelar calibração" if active or external else "Iniciar calibração")
+        button.set_sensitive(active or external or self.ac_online)
+        lines = []
+        if active:
+            minutes = int(cal.get("elapsed_s", 0) // 60)
+            lines.append(f"Em andamento: {cal['text']} · há {minutes // 60} h {minutes % 60:02d} min. "
+                         "Mantenha o carregador ligado.")
+        elif external:
+            lines.append("Há uma calibração em andamento, iniciada fora do NitroSense.")
+        elif not self.ac_online:
+            lines.append("Ligue o carregador para poder calibrar.")
+        last = cal.get("last")
+        if last:
+            when = time.strftime("%d/%m %H:%M", time.localtime(last["finished"]))
+            result = {"done": "concluída", "cancelled": "cancelada", "aborted": "interrompida",
+                      "timeout": "encerrada por tempo esgotado"}.get(last["result"], last["result"])
+            lines.append(f"Última calibração: {result} em {when}.")
+        ui["cal_status"].set_label("\n".join(lines))
+        # the firmware turns the charge limit off while calibrating
+        self.battery_limit_toggle.set_sensitive(not active)
+
     def _backlight_toggled(self, _w, on: bool) -> None:
         self.state["backlight_timeout"] = on
         self._send("set_backlight_timeout", on=on)
@@ -1569,6 +1647,8 @@ class MainWindow(Gtk.ApplicationWindow):
             self._set_switch(self.backlight_toggle,
                              bl if bl is not None else bool(self.state["backlight_timeout"]))
             self._set_switch(self.dgpu_toggle, self.hw.get("gpu_mode") == 1)
+            self._cal = self.hw.get("battery_calibration") or {}
+            self._update_calibration()
             limit_ok = bool(self.hw.get("battery_limit_supported"))
             self.bat_ui["limit_card"].set_visible(limit_ok)
             if limit_ok:

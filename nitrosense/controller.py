@@ -89,6 +89,19 @@ class Controller:
         if self.get_battery_limit() != on:
             raise WmiError("the firmware did not accept the battery charge limit")
 
+    def get_battery_calibration(self) -> bool | None:
+        """True/False = calibration on/off; None = not supported (or no answer)."""
+        try:
+            return enc.battery_calibration_decode(
+                self.wmi.call("GetBatteryHealth", enc.BATTERY_HEALTH_GET))
+        except WmiError:
+            return None
+
+    def set_battery_calibration(self, on: bool) -> None:
+        self.wmi.call("SetBatteryHealth", enc.battery_calibration_set(on))
+        if self.get_battery_calibration() != on:
+            raise WmiError("the firmware did not accept the battery calibration request")
+
     def get_backlight(self) -> tuple[int, bool] | None:
         try:
             return enc.backlight_decode(

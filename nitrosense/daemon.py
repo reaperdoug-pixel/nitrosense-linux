@@ -22,6 +22,7 @@ import threading
 import time
 
 from . import battery
+from . import calibration
 from . import disks
 from . import fancurve
 from . import history
@@ -124,6 +125,9 @@ class Daemon:
         self.hw_coolboost = None
         self.hw_backlight_timeout = None
         self.hw_battery_limit = None  # None = not supported
+        self.hw_battery_calibration = None  # None = not supported
+        self.cal_lock = threading.RLock()
+        self._battery_read = battery.read   # replaceable in tests
 
     @property
     def overdrive_supported(self) -> bool:
@@ -184,6 +188,7 @@ class Daemon:
             self.hw_lcd_overdrive = self.ctl.get_lcd_overdrive()
             self.hw_coolboost = self.ctl.get_coolboost()
             self.hw_battery_limit = self.ctl.get_battery_limit()
+            self.hw_battery_calibration = self.ctl.get_battery_calibration()
             bl = self.ctl.get_backlight()
             self.hw_backlight_timeout = bl[1] if bl else None
         self.reapply("startup")
@@ -202,7 +207,9 @@ class Daemon:
                 ("lcd_overdrive", lambda: st["lcd_overdrive"] is not None
                  and self.overdrive_supported and self.ctl.set_lcd_overdrive(st["lcd_overdrive"])),
                 ("win_key", lambda: st["win_key"] is not None and self.ctl.set_win_key(st["win_key"])),
+                # while a calibration runs the firmware keeps the charge limit off on purpose
                 ("battery_limit", lambda: st["battery_limit"] is not None
+                 and not st["battery_calibration"]["active"]
                  and self.battery_limit_supported and self.ctl.set_battery_limit(st["battery_limit"])),
                 ("backlight_timeout", lambda: st["backlight_timeout"] is not None
                  and self.backlight_timeout_supported
@@ -420,6 +427,7 @@ class Daemon:
                     "hw": {"lcd_overdrive": self.hw_lcd_overdrive, "coolboost": self.hw_coolboost,
                            "lcd_overdrive_supported": self.overdrive_supported,
                            "battery_limit": self.hw_battery_limit,
+                           "battery_calibration": self.calibration_status(),
                            "battery_limit_supported": self.battery_limit_supported,
                            "backlight_timeout": self.hw_backlight_timeout,
                            "backlight_timeout_supported": self.backlight_timeout_supported,
@@ -522,10 +530,114 @@ class Daemon:
             self.state["lcd_overdrive"] = on
             self._save_state()
 
+    # --------------------------------------------------- battery calibration
+    def _cal_state(self) -> dict:
+        with self.lock:
+            return copy.deepcopy(self.state["battery_calibration"])
+
+    def calibration_status(self) -> dict:
+        st = self._cal_state()
+        out = {"supported": self.hw_battery_calibration is not None, "active": st["active"],
+               "external": bool(self.hw_battery_calibration) and not st["active"],
+               "last": st["last"]}
+        if st["active"]:
+            tracker = calibration.Tracker.from_dict(st)
+            out.update(phase=tracker.phase, text=tracker.text, started=st["started"],
+                       elapsed_s=round(time.time() - st["started"]), min_seen=tracker.min_seen,
+                       restore_limit=st["restore_limit"])
+        return out
+
+    def cmd_start_battery_calibration(self, req: dict) -> None:
+        with self.cal_lock:
+            if self.hw_battery_calibration is None:
+                raise ValidationError("this firmware has no battery calibration")
+            if self._cal_state()["active"] or self.hw_battery_calibration:
+                raise ValidationError("a calibration is already running")
+            if not power.ac_online():
+                raise ValidationError("connect the charger before calibrating")
+            restore = bool(self.hw_battery_limit)  # the firmware turns the charge limit off
+            self.ctl.set_battery_calibration(True)
+            self.hw_battery_calibration = True
+            self.hw_battery_limit = self.ctl.get_battery_limit()
+            with self.lock:
+                self.state["battery_calibration"] = {
+                    "active": True, "restore_limit": restore, "started": time.time(),
+                    "phase": "charging", "min_seen": 100.0,
+                    "last": self.state["battery_calibration"]["last"]}
+                self._save_state()
+            log.info("battery calibration started (restore charge limit: %s)", restore)
+
+    def cmd_stop_battery_calibration(self, req: dict) -> None:
+        with self.cal_lock:
+            if self.hw_battery_calibration is None:
+                raise ValidationError("this firmware has no battery calibration")
+            if not self._finish_calibration("cancelled"):
+                raise WmiError("could not stop the calibration")
+
+    def _finish_calibration(self, result: str) -> bool:
+        """Turn the firmware's calibration off, restore the charge limit and record the result."""
+        st = self._cal_state()
+        try:
+            self.ctl.set_battery_calibration(False)
+        except WmiError as e:
+            log.warning("could not stop the battery calibration: %s", e)
+            return False
+        self.hw_battery_calibration = False
+        if st["restore_limit"]:
+            try:
+                self.ctl.set_battery_limit(True)
+                self.hw_battery_limit = True
+            except WmiError as e:
+                log.warning("could not restore the battery charge limit: %s", e)
+        with self.lock:
+            self.state["battery_calibration"] = {
+                "active": False, "restore_limit": False, "started": None, "phase": "charging",
+                "min_seen": 100.0,
+                "last": {"result": result, "finished": time.time(), "started": st["started"],
+                         "min_seen": st["min_seen"]}}
+            self._save_state()
+        log.info("battery calibration finished: %s", result)
+        return True
+
+    def battery_calibration_step(self) -> None:
+        """Follow a running calibration; also notices a calibration changed outside the service."""
+        if not self.ready:
+            return
+        with self.cal_lock:
+            hw = self.ctl.get_battery_calibration()
+            if hw is not None:
+                self.hw_battery_calibration = hw
+            st = self._cal_state()
+            if not st["active"]:
+                return
+            bats = self._battery_read()
+            b = bats[0] if bats else None
+            tracker = calibration.Tracker.from_dict(st)
+            result = tracker.update(b["capacity"] if b else None, b["status"] if b else "",
+                                    time.time(), hw)
+            if result:
+                self._finish_calibration(result)
+            elif (tracker.phase, tracker.min_seen) != (st["phase"], st["min_seen"]):
+                with self.lock:
+                    self.state["battery_calibration"].update(phase=tracker.phase,
+                                                             min_seen=tracker.min_seen)
+                    self._save_state()
+
+    def start_calibration_monitor(self, interval: float = 15.0) -> None:
+        def loop() -> None:
+            while not self._stop.wait(interval):
+                try:
+                    self.battery_calibration_step()
+                except Exception as e:
+                    log.warning("calibration step failed: %s", e)
+        threading.Thread(target=loop, name="calibration", daemon=True).start()
+
     def cmd_set_battery_limit(self, req: dict) -> None:
         on = _bool(req.get("on"))
         if not self.battery_limit_supported:
             raise ValidationError("this firmware has no battery charge limit")
+        if self._cal_state()["active"]:
+            raise ValidationError("the charge limit cannot be changed during a calibration")
         self.ctl.set_battery_limit(on)
         self.hw_battery_limit = on
         with self.lock:
@@ -653,6 +765,7 @@ def main() -> int:
     d = Daemon()
     d.startup()
     d.start_throttle_monitor()
+    d.start_calibration_monitor()
     d.start_fan_curve()
     d.start_recorder()
 

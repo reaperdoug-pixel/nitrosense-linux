@@ -38,6 +38,8 @@ def default_state(zone_colors: list[str] | None = None) -> dict:
         "win_key": None,
         "backlight_timeout": None,
         "battery_limit": None,
+        "battery_calibration": {"active": False, "restore_limit": False, "started": None,
+                                "phase": "charging", "min_seen": 100.0, "last": None},
         "power": {"ac": "balance", "battery": "balance"},
         "power_applied": False,
     }

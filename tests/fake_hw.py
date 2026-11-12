@@ -27,6 +27,7 @@ class FakeWmi:
         self.coolboost = False
         self.overdrive = False
         self.battery_limit = False
+        self.battery_calibration = False
         self.reject_battery_limit = False
         self.backlight = (100, False)
         self.t0 = time.monotonic()
@@ -78,10 +79,14 @@ class FakeWmi:
                 self.overdrive = bool((value >> 48) & 1)
             return 0
         if name == "GetBatteryHealth":
-            return 3 | (int(self.battery_limit) << 24)
+            return 3 | (int(self.battery_limit) << 24) | (int(self.battery_calibration) << 32)
         if name == "SetBatteryHealth":
             if value & 0xFF == 1 and (value >> 8) & 0xFF == 1 and not self.reject_battery_limit:
                 self.battery_limit = bool((value >> 16) & 0xFF)
+            elif value & 0xFF == 1 and (value >> 8) & 0xFF == 2:
+                self.battery_calibration = bool((value >> 16) & 0xFF)
+                if self.battery_calibration:
+                    self.battery_limit = False  # calibration disables health mode, as on hardware
             return 0
         if name == "GetGamingMiscSetting":
             return 0  # no discrete GPU switch on AN515-44
@@ -118,6 +123,7 @@ def make_daemon(state_dir: str | None = None):
     d.ready = True
     d._rapl = d._rapl_rec = FakeRapl()
     d.hw_battery_limit = d.ctl.get_battery_limit()
+    d.hw_battery_calibration = d.ctl.get_battery_calibration()
     d.ctl.wmi.calls.clear()  # tests assert on the calls they trigger themselves
     d.power_applied_log = applied
     # synthetic NVMe SMART data (the real log needs root); wear is configurable for GUI demos
@@ -188,6 +194,7 @@ def main() -> None:
         d.throttle._cooling_states = lambda: {"processor": 2, "powerclamp": 0, "tcc": 8}
     d.start_throttle_monitor(1.0)
     d.start_fan_curve(1.0)
+    d.start_calibration_monitor(2.0)
     dmod.start_server(d, sock)
     print("mock nitrosensed on", sock, flush=True)
     while True:

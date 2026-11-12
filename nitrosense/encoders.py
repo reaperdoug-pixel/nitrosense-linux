@@ -264,12 +264,21 @@ def _clamp(v: int, lo: int, hi: int) -> int:
 
 # ---------------------------------------------------------------- battery charge limit
 BATTERY_HEALTH_GET = 0x0101  # battery 1, query 1
-BATTERY_HEALTH_MODE = 1      # function bit: charge limit (2 would be calibration, not used)
+BATTERY_HEALTH_MODE = 1      # function bit: charge limit
+BATTERY_CALIBRATION_MODE = 2  # function bit: calibration (charge, discharge, recharge)
+
+
+def battery_function_set(function: int, on: bool) -> int:
+    """SetBatteryHealth input: battery 1, function mask, status 0/1."""
+    return 1 | (function << 8) | (int(on) << 16)
 
 
 def battery_health_set(on: bool) -> int:
-    """SetBatteryHealth input: battery 1, function mask = health mode, status 0/1."""
-    return 1 | (BATTERY_HEALTH_MODE << 8) | (int(on) << 16)
+    return battery_function_set(BATTERY_HEALTH_MODE, on)
+
+
+def battery_calibration_set(on: bool) -> int:
+    return battery_function_set(BATTERY_CALIBRATION_MODE, on)
 
 
 def battery_health_decode(output: int) -> bool | None:
@@ -278,3 +287,10 @@ def battery_health_decode(output: int) -> bool | None:
     if not output & BATTERY_HEALTH_MODE:
         return None
     return ((output >> 24) & 0xFF) > 0
+
+
+def battery_calibration_decode(output: int) -> bool | None:
+    """GetBatteryHealth output: byte 4 is the calibration state. None = not supported."""
+    if not output & BATTERY_CALIBRATION_MODE:
+        return None
+    return ((output >> 32) & 0xFF) > 0

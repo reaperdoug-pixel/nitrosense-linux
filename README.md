@@ -48,7 +48,7 @@ está em **português do Brasil**.
 | **Início** | Medidores de temperatura da CPU e da GPU, RPM das ventoinhas, consumo em watts, carga da GPU, o estado do desempenho (normal, ou limitado por calor ou potência) com o clock da CPU, resumo do cenário, saúde do SSD e da bateria num relance. |
 | **Cenário** | Planos de energia para tomada e bateria e o controle de ventoinha: **Automático**, **Máx**, **Personalizado** (controles da CPU e da GPU), **Curva** (um gráfico de temperatura por velocidade, arrastável, com regras de segurança) e **CoolBoost**. |
 | **Discos** | Saúde do NVMe pelo SMART: desgaste, reserva de células, horas ligado, dados gravados e lidos, desligamentos inesperados, erros de integridade, temperatura, espaço em uso e conselhos em linguagem simples. |
-| **Bateria** | Saúde (capacidade atual contra a original), ciclos, carga, consumo, autonomia, gráficos de histórico e um interruptor para **limitar a carga a cerca de 80%**. |
+| **Bateria** | Saúde (capacidade atual contra a original), ciclos, carga, consumo, autonomia, gráficos de histórico e um interruptor para **limitar a carga a cerca de 80%** e a **calibração** da bateria. |
 | **Monitoramento** | Gráficos ao vivo dos últimos 12 minutos de temperatura e carga da CPU e da GPU, com watts e clocks. |
 | **Processos** | Os programas que mais pesam em CPU, memória e GPU, e o que mantém a GPU dedicada acordada. |
 | **Histórico** | De 1 hora a 30 dias: temperaturas, consumo de CPU e GPU, frequência da CPU com os períodos de limitação marcados, carga e consumo da bateria e a tendência de desgaste do SSD. |
@@ -185,6 +185,13 @@ de saúde usam o histórico. **Limitar a carga a 80%** liga o "modo de saúde" d
 para perto de 80%, o que reduz o desgaste quando o notebook fica na tomada. O serviço reaplica o
 limite a cada boot e a cada retorno da suspensão.
 
+**Calibração da bateria**: o firmware carrega a bateria até 100%, descarrega e recarrega uma vez, para o
+notebook reaprender a capacidade real (útil quando a saúde parece baixa demais para os ciclos). Leva
+várias horas. O botão **Iniciar calibração** pede confirmação e só funciona com o carregador ligado.
+O limite de 80% é desligado pelo firmware durante o processo e o serviço o religa no fim. A aba mostra
+a fase (carregando, aguardando, descarregando, recarregando) e o tempo decorrido, e **Cancelar
+calibração** interrompe a qualquer momento.
+
 ### Monitoramento
 Gráficos ao vivo dos últimos 12 minutos (uma amostra por segundo) da CPU e da GPU: temperatura
 (linha roxa) e carga (área lilás), com a temperatura, a carga, os watts e o clock atuais no
@@ -275,6 +282,14 @@ O serviço escreve no firmware, então os recursos de risco têm proteções.
 **Limite de carga da bateria**: usa a mesma interface WMI do driver `acer-wmi-battery`. O serviço lê
 o estado de volta depois de cada mudança e avisa se o firmware não a aceitou.
 O `tools/probe_battery.py` é uma verificação somente de leitura dessa interface.
+
+**Calibração da bateria**: só começa com o carregador ligado e depois de uma confirmação. O firmware
+não informa o progresso e nem o driver `acer-wmi-battery` trata o fim do ciclo, então o serviço o
+acompanha pelo nível de carga e pelo estado: considera a calibração concluída quando a bateria
+chegou a 30% ou menos e voltou a 99% ou mais. Ele a encerra sozinho nesse ponto (e religa o limite de
+80%, se estava ligado), a cancela se o firmware a interromper (por exemplo, se o carregador sair da
+tomada) e a encerra depois de 16 horas, por segurança. Durante a descarga o sistema pode mostrar avisos
+de bateria fraca.
 
 **GPU dedicada**: nada no app a acorda. O NVML e o `nvidia-smi` só são usados enquanto o estado de
 runtime PCI está *active*. O alerta de redução por calor com a janela fechada só consulta o NVML
@@ -389,7 +404,8 @@ c.request("set_fan", mode="auto")
 | `set_fan_curve` | `points`: de 3 a 8 pares `[temperatura, percentual]` (veja [Proteções](#proteções)) |
 | `set_fan_speed` | `fan` cpu/gpu, `percent` 0–100 (só no modo Personalizado) |
 | `set_coolboost` | `on` |
-| `set_battery_limit` | `on` (só se o firmware suportar) |
+| `set_battery_limit` | `on` (só se o firmware suportar; recusado durante uma calibração) |
+| `start_battery_calibration` / `stop_battery_calibration` | nenhum; iniciar exige o carregador ligado; o estado vai em `status` → `hw.battery_calibration` |
 | `set_keyboard` | `keyboard`: `mode` static/dynamic, `brightness` 1–5, `zones_on` [4 booleanos], `zone_colors` [4 × "#RRGGBB"], `effect` breathing/wave/zoom/shifting/neon, `speed` 1–9, `direction` 1/2, `effect_color` |
 | `set_lcd_overdrive` / `set_win_key` / `set_backlight_timeout` | `on` |
 | `set_power_plan` | `source` ac/battery, `plan` powersaver/balance/performance |
@@ -431,8 +447,8 @@ Controle de saúde da bateria, GUID `79772EC5-04B1-4BFD-843C-61E7F77B6CC9` (a in
 
 | ID | Método | Entrada (bytes) | Saída |
 |---:|---|---|---|
-| 20 | GetBatteryHealth | `[bateria 1, consulta 1, 0, 0]` | byte 0: funções suportadas (1 = modo de saúde, 2 = calibração); byte 3: modo de saúde ligado/desligado |
-| 21 | SetBatteryHealth | `[bateria 1, máscara da função, estado 0/1, 0 …]` (8 bytes) | 4 bytes; o serviço confirma lendo o estado de volta |
+| 20 | GetBatteryHealth | `[bateria 1, consulta 1, 0, 0]` | byte 0: funções suportadas (1 = modo de saúde, 2 = calibração); byte 3: modo de saúde ligado/desligado; byte 4: calibração ligada/desligada |
+| 21 | SetBatteryHealth | `[bateria 1, máscara da função (1 = modo de saúde, 2 = calibração), estado 0/1, 0 …]` (8 bytes) | 4 bytes; o serviço confirma lendo o estado de volta |
 
 Toda saída das duas primeiras classes começa com um byte de status (0 = sucesso); o serviço trata
 qualquer outro valor como erro. Na chamada da bateria, o resultado é conferido lendo o estado de
@@ -562,7 +578,7 @@ usar.
 ## Desenvolvimento
 
 ```bash
-# testes unitários (103): encoders, serviço contra um firmware simulado, discos, bateria,
+# testes unitários (116): encoders, serviço contra um firmware simulado, discos, bateria,
 # histórico, RAPL, limitação, processos e a curva de ventoinha
 python3 -m unittest discover -s tests -v
 
