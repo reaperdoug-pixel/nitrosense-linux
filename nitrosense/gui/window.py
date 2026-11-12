@@ -480,8 +480,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self.curve_box = _box(Gtk.Orientation.VERTICAL, 8)
         head = _box(Gtk.Orientation.HORIZONTAL, 8)
-        hint = _lbl("Arraste os pontos para definir a velocidade em cada temperatura. As duas "
-                    "ventoinhas seguem a temperatura mais alta.", "ns-dim")
+        hint = _lbl("Arraste os pontos para definir a velocidade em cada temperatura. Com uma curva "
+                    "só, as duas ventoinhas seguem a temperatura mais alta.", "ns-dim")
         hint.set_hexpand(True)
         hint.set_wrap(True)
         head.append(hint)
@@ -492,6 +492,40 @@ class MainWindow(Gtk.ApplicationWindow):
             b.connect("clicked", self._curve_preset, key)
             head.append(b)
         self.curve_box.append(head)
+
+        split = _box(Gtk.Orientation.HORIZONTAL, 10, "ns-row")
+        txt = _box(Gtk.Orientation.VERTICAL, 2)
+        txt.set_hexpand(True)
+        txt.append(_lbl("Curvas separadas para cada ventoinha"))
+        txt.append(_lbl("A ventoinha da CPU segue a temperatura da CPU e a da GPU segue a da GPU "
+                        "(com a GPU suspensa, a da CPU). Em 88 °C na CPU ou 82 °C na GPU as duas "
+                        "vão a 100%.", "ns-dim"))
+        split.append(txt)
+        self.curve_split = _switch()
+        self.curve_split.connect("notify::active", self._switch_changed, self._curve_split_toggled)
+        split.append(self.curve_split)
+        self.curve_box.append(split)
+
+        self.curve_pick = _box(Gtk.Orientation.HORIZONTAL, 6)
+        self.curve_target = "cpu"
+        self.curve_pick_buttons = {}
+        first = None
+        for key, text in (("cpu", "Ventoinha da CPU"), ("gpu", "Ventoinha da GPU")):
+            b = Gtk.ToggleButton(label=text)
+            b.add_css_class("ns-seg")
+            if first is None:
+                first = b
+            else:
+                b.set_group(first)
+            b.connect("toggled", self._curve_target_toggled, key)
+            self.curve_pick.append(b)
+            self.curve_pick_buttons[key] = b
+        first.set_active(True)
+        self.curve_pick.set_visible(False)
+        self.curve_box.append(self.curve_pick)
+        self._curves = {"cpu": [list(p) for p in fancurve.DEFAULT_POINTS],
+                        "gpu": [list(p) for p in fancurve.DEFAULT_POINTS]}
+        self._curve_split = False
         self.curve_editor = FanCurveEditor(
             215, fancurve.MIN_PERCENT, fancurve.SAFETY_CPU,
             lambda v: _conv(v, self.prefs.get("unit", "C")), self._curve_changed)
@@ -1382,27 +1416,69 @@ class MainWindow(Gtk.ApplicationWindow):
         self._send("set_fan", mode="custom", cpu_auto=f["cpu_auto"], gpu_auto=f["gpu_auto"],
                    cpu_percent=f["cpu_percent"], gpu_percent=f["gpu_percent"])
 
+    def _send_curves(self) -> None:
+        self.state["fan_curve"] = {"points": self._curves["cpu"], "gpu_points": self._curves["gpu"],
+                                   "split": self._curve_split}
+        self._send("set_fan_curve", points=self._curves["cpu"], gpu_points=self._curves["gpu"],
+                   split=self._curve_split)
+
     def _curve_changed(self, points: list) -> None:
-        self.state["fan_curve"] = {"points": points}
-        self._send("set_fan_curve", points=points)
+        self._curves[self.curve_target] = points
+        self._send_curves()
 
     def _curve_preset(self, _button, key: str) -> None:
         points = [[t, p] for t, p in zip(fancurve.TEMPS, fancurve.PRESETS[key])]
         self.curve_editor.set_points(points)
         self._curve_changed(points)
 
+    def _curve_split_toggled(self, _w, on: bool) -> None:
+        self._curve_split = on
+        if not on:
+            self.curve_target = "cpu"
+            self._set_toggle(self.curve_pick_buttons["cpu"], True)
+        self.curve_pick.set_visible(on)
+        self.curve_editor.set_points(self._curves[self.curve_target])
+        self._send_curves()
+
+    def _curve_target_toggled(self, button: Gtk.ToggleButton, which: str) -> None:
+        if button.get_active() and not self._updating and hasattr(self, "curve_editor"):
+            self.curve_target = which
+            self.curve_editor.set_points(self._curves[which])
+
+    def _sync_curves(self, cfg: dict) -> None:
+        """Take the saved curves from the service (unless the user is dragging one)."""
+        if self.curve_editor.dragging is not None:
+            return
+        self._curves = {"cpu": cfg["points"], "gpu": cfg.get("gpu_points") or cfg["points"]}
+        self._curve_split = bool(cfg.get("split"))
+        self._set_switch(self.curve_split, self._curve_split)
+        self.curve_pick.set_visible(self._curve_split)
+        if not self._curve_split and self.curve_target != "cpu":
+            self.curve_target = "cpu"
+            self._set_toggle(self.curve_pick_buttons["cpu"], True)
+        self.curve_editor.set_points(self._curves[self.curve_target])
+
     def _update_curve_status(self, info: dict) -> None:
         unit = self.prefs.get("unit", "C")
-        self.curve_editor.set_live(info.get("temp"), info.get("percent"))
+        split = bool(info.get("split"))
+        if split and self.curve_target == "gpu":
+            self.curve_editor.set_live(info.get("gpu_temp"), info.get("gpu_percent"))
+        else:
+            self.curve_editor.set_live(info.get("temp"), info.get("percent"))
         if info.get("failsafe"):
             text = "Sem leitura de temperatura: as ventoinhas voltaram ao modo automático."
         elif info.get("safety"):
-            text = (f"Proteção ativa: {_conv(info['temp'], unit)}° é alto demais, "
-                    "as ventoinhas ficam em 100%.")
-        elif info.get("temp") is not None:
-            text = (f"Agora: {_conv(info['temp'], unit)}° → ventoinhas a {info['percent']}%.")
-        else:
+            text = (f"Proteção ativa: a temperatura está alta demais "
+                    f"({_conv(info.get('temp'), unit)}°), as ventoinhas ficam em 100%.")
+        elif info.get("temp") is None:
             text = "Aguardando a primeira leitura..."
+        elif split:
+            asleep = self._current.get("gpu_suspended") if self._current else False
+            gpu_note = " (GPU suspensa: segue a CPU)" if asleep else ""
+            text = (f"Agora: CPU {_conv(info['temp'], unit)}° → {info['percent']}% · "
+                    f"GPU {_conv(info.get('gpu_temp'), unit)}°{gpu_note} → {info.get('gpu_percent')}%.")
+        else:
+            text = (f"Agora: {_conv(info['temp'], unit)}° → ventoinhas a {info['percent']}%.")
         self.curve_status.set_label(text)
 
     def _coolboost_toggled(self, _w, on: bool) -> None:
@@ -1619,7 +1695,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._got_status = True
             self.state = status["state"]
             if "fan_curve" in self.state:
-                self.curve_editor.set_points(self.state["fan_curve"]["points"])
+                self._sync_curves(self.state["fan_curve"])
             self._update_curve_status(status.get("fan_curve") or {})
             self.hw = status.get("hw", {})
             self.ac_online = status.get("ac", True)

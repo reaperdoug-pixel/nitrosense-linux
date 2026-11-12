@@ -169,5 +169,103 @@ class DaemonTests(unittest.TestCase):
         self.assertEqual(self.wmi.fan_speed["cpu"], 90)
 
 
+QUIET = [[40, 20], [60, 30], [80, 60], [90, 100]]
+LOUD = [[40, 40], [60, 70], [80, 100], [90, 100]]
+
+
+class SplitCurveTests(unittest.TestCase):
+    def cfg(self, **kw):
+        return dict({"points": QUIET, "gpu_points": LOUD, "split": True}, **kw)
+
+    def test_each_fan_follows_its_own_curve_and_temperature(self):
+        c = fc.FanCurves()
+        plan = c.step(self.cfg(), 60, 60, 2)           # same temperature, different curves
+        self.assertEqual(plan, fc.Plan(30, 70, True, False))
+        plan = c.step(self.cfg(), 40, 80, 2)           # CPU cool, GPU hot: only the GPU fan rises
+        self.assertEqual((plan.cpu, plan.gpu, plan.enter), (None, 100, False))
+        self.assertEqual((c.info["percent"], c.info["gpu_percent"], c.info["gpu_temp"]), (30, 100, 80))
+
+    def test_the_two_fans_slow_down_independently(self):
+        c = fc.FanCurves(hold_s=8)
+        c.step(self.cfg(), 80, 80, 2)                   # CPU 60 %, GPU 100 %
+        for _ in range(3):
+            self.assertEqual(c.step(self.cfg(), 40, 80, 2).cpu, None)  # CPU cooling: waiting
+        plan = c.step(self.cfg(), 40, 80, 2)            # 8 s: the CPU fan slows, the GPU does not
+        self.assertEqual((plan.cpu, plan.gpu), (20, None))
+
+    def test_the_gpu_fan_follows_the_cpu_while_the_gpu_sleeps(self):
+        c = fc.FanCurves()
+        plan = c.step(self.cfg(), 60, None, 2)
+        self.assertEqual((plan.cpu, plan.gpu), (30, 70))  # GPU curve evaluated at the CPU's 60 C
+        self.assertEqual(c.info["gpu_temp"], 60)
+
+    def test_safety_hits_both_fans(self):
+        c = fc.FanCurves()
+        c.step(self.cfg(), 50, 50, 2)
+        plan = c.step(self.cfg(), 50, 82, 2)            # only the GPU is at its limit
+        self.assertEqual((plan.cpu, plan.gpu), (100, 100))
+        self.assertTrue(c.info["safety"])
+
+    def test_switching_between_one_and_two_curves_starts_over(self):
+        c = fc.FanCurves()
+        one = {"points": QUIET, "gpu_points": LOUD, "split": False}
+        self.assertEqual(c.step(one, 60, 60, 2), fc.Plan(30, 30, True, False))  # shared curve
+        plan = c.step(self.cfg(), 60, 60, 2)
+        self.assertEqual(plan, fc.Plan(30, 70, True, False))                   # re-enters
+
+    def test_failsafe_releases_once_for_both(self):
+        c = fc.FanCurves(fail_limit=2)
+        c.step(self.cfg(), 50, 50, 2)
+        c.step(self.cfg(), None, None, 2)
+        plan = c.step(self.cfg(), None, None, 2)
+        self.assertTrue(plan.release)
+        self.assertFalse(c.step(self.cfg(), None, None, 2).release)
+
+
+class SplitDaemonTests(unittest.TestCase):
+    def setUp(self):
+        self.d = make_daemon()
+        self.wmi = self.d.ctl.wmi
+
+    def set_temp(self, cpu, gpu=None):
+        self.d._sensor_cache = (1e12, {"cpu_temp": cpu, "gpu_temp": gpu, "cpu_fan": 2000,
+                                       "gpu_fan": 2000, "cpu_power": None, "igpu_power": None,
+                                       "sys_power": None})
+
+    def test_split_drives_each_fan_separately(self):
+        self.set_temp(60, 70)
+        self.d._gpu_probe = type("P", (), {"awake": lambda s: True})()  # the dGPU is awake
+        self.d.handle({"cmd": "set_fan_curve", "points": QUIET, "gpu_points": LOUD, "split": True})
+        self.d.handle({"cmd": "set_fan", "mode": "curve"})
+        self.assertEqual(self.wmi.fan_speed, {"cpu": 30, "gpu": 90})  # CPU 60 C on QUIET, GPU 70 C on LOUD
+        st = self.d.handle({"cmd": "status"})["fan_curve"]
+        self.assertEqual((st["split"], st["percent"], st["gpu_percent"]), (True, 30, 90))
+        self.assertEqual(st["gpu_temp"], 70)
+        self.assertEqual(st["gpu_points"], LOUD)
+
+    def test_validation_and_persistence_of_the_second_curve(self):
+        with self.assertRaises(dmod.ValidationError):
+            self.d.handle({"cmd": "set_fan_curve", "points": QUIET,
+                           "gpu_points": [[40, 30], [50, 20], [90, 100]], "split": True})
+        self.d.handle({"cmd": "set_fan_curve", "points": QUIET, "gpu_points": LOUD, "split": True})
+        d2 = make_daemon(dmod.STATE_DIR)
+        self.assertEqual(d2.state["fan_curve"], {"points": QUIET, "gpu_points": LOUD, "split": True})
+        # an old client that sends only the points keeps the second curve and the split flag
+        self.d.handle({"cmd": "set_fan_curve", "points": [[40, 30], [60, 50], [90, 100]]})
+        st = self.d.state["fan_curve"]
+        self.assertEqual((st["gpu_points"], st["split"]), (LOUD, True))
+        self.d.handle({"cmd": "set_fan_curve", "split": False})
+        self.assertFalse(self.d.state["fan_curve"]["split"])
+
+    def test_old_state_files_gain_the_new_fields(self):
+        import json
+        with open(dmod.STATE_FILE, "w") as f:
+            json.dump({"fan_curve": {"points": QUIET}}, f)
+        d2 = make_daemon(dmod.STATE_DIR)
+        self.assertEqual(d2.state["fan_curve"]["points"], QUIET)
+        self.assertEqual(d2.state["fan_curve"]["split"], False)
+        self.assertEqual(len(d2.state["fan_curve"]["gpu_points"]), len(fc.DEFAULT_POINTS))
+
+
 if __name__ == "__main__":
     unittest.main()

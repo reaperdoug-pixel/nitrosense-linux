@@ -48,7 +48,7 @@ The interface is in **Brazilian Portuguese**.
 | Tab | What it shows or does |
 |---|---|
 | **Início** (Home) | CPU and GPU temperature gauges, fan RPM, power in watts, GPU load, the performance state (normal, or held back by heat or power) with the CPU clock, scenario summary, SSD and battery health at a glance. |
-| **Cenário** (Scenario) | Power plans for AC and battery, and fan control: **Auto**, **Max**, **Custom** (CPU and GPU sliders), **Curve** (a draggable temperature/speed graph with safety rules) and **CoolBoost**. |
+| **Cenário** (Scenario) | Power plans for AC and battery, and fan control: **Auto**, **Max**, **Custom** (CPU and GPU sliders), **Curve** (a draggable temperature/speed graph, one for both fans or one per fan, with safety rules) and **CoolBoost**. |
 | **Discos** (Disks) | NVMe health from SMART: wear, spare capacity, power-on hours, data written and read, unsafe shutdowns, media errors, temperature, file-system use, plain-language advice. |
 | **Bateria** (Battery) | Health (full-charge capacity against the original), cycles, charge, power draw, time left, history charts, a switch to **limit charging to about 80 %** and the battery **calibration**. |
 | **Monitoramento** (Monitoring) | Live 12-minute charts of CPU and GPU temperature and load, with watts and clocks. |
@@ -173,7 +173,9 @@ protecting itself. A banner on top shows the most serious [alert](#alerts).
   maximum speed in Auto mode only).
 - **Curve**: drag the points of a temperature/speed graph, or pick *Silencioso*, *Equilibrado*
   or *Desempenho*. The service follows the hottest of the CPU and the awake GPU every 2 s and
-  drives both fans. A dashed line shows the current temperature. See [Safety](#safety) for the
+  drives both fans. A dashed line shows the current temperature. With **Curvas separadas para cada
+  ventoinha** on, the CPU fan follows the CPU temperature and the GPU fan the GPU temperature (the CPU's
+  while the GPU is asleep); a selector switches between the two curves. See [Safety](#safety) for the
   rules the curve cannot override.
 
 ### Discos (Disks)
@@ -269,6 +271,8 @@ The service writes to firmware, so the risky features have guard rails.
 **Fan curve** (rules the curve cannot override):
 - Speeds are never below 20 %, and a curve must reach 100 % by 90 °C. The service refuses others.
 - At **88 °C (CPU)** or **82 °C (GPU, when awake)** the fans go to 100 % whatever the curve says.
+  With separate curves the rule stays shared: if either temperature reaches its limit, both fans go
+  to 100 %.
 - Speed rises at once but falls only after the lower target has held for 8 s, so the fans do not
   hunt up and down.
 - If every temperature sensor fails for a few samples, the fans go back to the firmware's
@@ -401,7 +405,7 @@ c.request("set_fan", mode="auto")
 | `history` | `range` 1h/6h/24h/7d/30d; bucketed series, summaries, SSD and battery trends |
 | `gpu_holders` | none; programs holding `/dev/nvidia*` open |
 | `set_fan` | `mode` auto/max/custom/curve, optional `cpu_auto`, `gpu_auto`, `cpu_percent`, `gpu_percent` |
-| `set_fan_curve` | `points`: 3–8 `[temperature, percent]` pairs (see [Safety](#safety)) |
+| `set_fan_curve` | `points`: 3–8 `[temperature, percent]` pairs (see [Safety](#safety)); optional `gpu_points` (the GPU fan's curve) and `split` (one curve per fan) |
 | `set_fan_speed` | `fan` cpu/gpu, `percent` 0–100 (Custom mode only) |
 | `set_coolboost` | `on` |
 | `set_battery_limit` | `on` (only if the firmware supports it; refused during a calibration) |
@@ -571,7 +575,7 @@ stays installed; remove it with `sudo apt remove acpi-call-dkms` if nothing else
 ## Development
 
 ```bash
-# unit tests (116): encoders, daemon against a simulated firmware, disks, battery, history,
+# unit tests (125): encoders, daemon against a simulated firmware, disks, battery, history,
 # RAPL, throttling, processes and the fan curve
 python3 -m unittest discover -s tests -v
 

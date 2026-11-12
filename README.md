@@ -46,7 +46,7 @@ está em **português do Brasil**.
 | Aba | O que mostra ou faz |
 |---|---|
 | **Início** | Medidores de temperatura da CPU e da GPU, RPM das ventoinhas, consumo em watts, carga da GPU, o estado do desempenho (normal, ou limitado por calor ou potência) com o clock da CPU, resumo do cenário, saúde do SSD e da bateria num relance. |
-| **Cenário** | Planos de energia para tomada e bateria e o controle de ventoinha: **Automático**, **Máx**, **Personalizado** (controles da CPU e da GPU), **Curva** (um gráfico de temperatura por velocidade, arrastável, com regras de segurança) e **CoolBoost**. |
+| **Cenário** | Planos de energia para tomada e bateria e o controle de ventoinha: **Automático**, **Máx**, **Personalizado** (controles da CPU e da GPU), **Curva** (um gráfico de temperatura por velocidade, arrastável, uma para as duas ventoinhas ou uma para cada, com regras de segurança) e **CoolBoost**. |
 | **Discos** | Saúde do NVMe pelo SMART: desgaste, reserva de células, horas ligado, dados gravados e lidos, desligamentos inesperados, erros de integridade, temperatura, espaço em uso e conselhos em linguagem simples. |
 | **Bateria** | Saúde (capacidade atual contra a original), ciclos, carga, consumo, autonomia, gráficos de histórico e um interruptor para **limitar a carga a cerca de 80%** e a **calibração** da bateria. |
 | **Monitoramento** | Gráficos ao vivo dos últimos 12 minutos de temperatura e carga da CPU e da GPU, com watts e clocks. |
@@ -169,7 +169,10 @@ a se proteger. Uma faixa no topo mostra o [alerta](#alertas) mais grave.
 - **Curva**: arraste os pontos de um gráfico de temperatura por velocidade, ou escolha
   *Silencioso*, *Equilibrado* ou *Desempenho*. A cada 2 s o serviço acompanha a temperatura mais
   alta entre a CPU e a GPU acordada e comanda as duas ventoinhas. Uma linha tracejada mostra a
-  temperatura atual. Veja em [Proteções](#proteções) as regras que a curva não consegue desfazer.
+  temperatura atual. Com **Curvas separadas para cada ventoinha** ligado, a ventoinha da CPU segue a
+  temperatura da CPU e a da GPU segue a da GPU (com a GPU suspensa, a da GPU segue a CPU); um seletor
+  alterna entre as duas curvas. Veja em [Proteções](#proteções) as regras que a curva não consegue
+  desfazer.
 
 ### Discos
 Para cada NVMe: um selo de saúde (Saudável / Atenção / Crítico), temperatura, desgaste, reserva de
@@ -267,7 +270,8 @@ O serviço escreve no firmware, então os recursos de risco têm proteções.
 - A velocidade nunca fica abaixo de 20%, e a curva precisa chegar a 100% até 90 °C. O serviço recusa
   outras.
 - Em **88 °C (CPU)** ou **82 °C (GPU, quando acordada)** as ventoinhas vão a 100% qualquer que seja
-  a curva.
+  a curva. Com curvas separadas, essa proteção continua valendo para as duas ventoinhas: se uma das
+  temperaturas chegar ao limite, as duas vão a 100%.
 - A velocidade sobe na hora, mas só desce depois que o alvo mais baixo se manteve por 8 s, para as
   ventoinhas não oscilarem.
 - Se todos os sensores de temperatura falharem por algumas amostras, as ventoinhas voltam ao modo
@@ -401,7 +405,7 @@ c.request("set_fan", mode="auto")
 | `history` | `range` 1h/6h/24h/7d/30d; séries agrupadas, resumos, tendências do SSD e da bateria |
 | `gpu_holders` | nenhum; programas com `/dev/nvidia*` aberto |
 | `set_fan` | `mode` auto/max/custom/curve, opcionais `cpu_auto`, `gpu_auto`, `cpu_percent`, `gpu_percent` |
-| `set_fan_curve` | `points`: de 3 a 8 pares `[temperatura, percentual]` (veja [Proteções](#proteções)) |
+| `set_fan_curve` | `points`: de 3 a 8 pares `[temperatura, percentual]` (veja [Proteções](#proteções)); opcionais `gpu_points` (a curva da ventoinha da GPU) e `split` (usar uma curva para cada ventoinha) |
 | `set_fan_speed` | `fan` cpu/gpu, `percent` 0–100 (só no modo Personalizado) |
 | `set_coolboost` | `on` |
 | `set_battery_limit` | `on` (só se o firmware suportar; recusado durante uma calibração) |
@@ -578,7 +582,7 @@ usar.
 ## Desenvolvimento
 
 ```bash
-# testes unitários (116): encoders, serviço contra um firmware simulado, discos, bateria,
+# testes unitários (125): encoders, serviço contra um firmware simulado, discos, bateria,
 # histórico, RAPL, limitação, processos e a curva de ventoinha
 python3 -m unittest discover -s tests -v
 

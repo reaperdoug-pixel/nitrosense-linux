@@ -112,7 +112,7 @@ class Daemon:
         self._rapl_rec = Rapl()  # its own baseline: the history gets the average over each interval
         self._rapl_thr = Rapl()  # and one more for the throttling monitor
         self.throttle = throttle.CpuThrottle()
-        self.curve = fancurve.FanCurve()
+        self.curve = fancurve.FanCurves()
         self.fan_lock = threading.RLock()  # serialises fan commands and the curve thread
         self._gpu_probe = GpuMonitor()     # only to know whether the dGPU is awake
         self._gpu_slow = GpuMonitor()      # NVML slowdown reasons, used by the throttle thread only
@@ -244,7 +244,7 @@ class Daemon:
         with self.fan_lock:
             with self.lock:
                 mode = self.state["fan"]["mode"]
-                points = [list(p) for p in self.state["fan_curve"]["points"]]
+                cfg = copy.deepcopy(self.state["fan_curve"])
             if mode != "curve":
                 if self.curve.applied is not None or self.curve.failsafe:
                     self.curve.reset()
@@ -253,18 +253,18 @@ class Daemon:
                 return
             s = self.sensors()
             gpu = s["gpu_temp"] if self._gpu_probe.awake() else None  # asleep: value is not real
-            decision = self.curve.step(points, s["cpu_temp"], gpu, dt)
+            plan = self.curve.step(cfg, s["cpu_temp"], gpu, dt)
             try:
-                if decision.release:
+                if plan.release:
                     log.warning("no temperature readings: fans back to automatic")
                     self.ctl.set_fan_mode("auto")
-                elif decision.percent is not None:
-                    pct = decision.percent
-                    if decision.enter:
-                        self.ctl.set_fan_mode("custom", False, False, pct, pct)
-                    else:
-                        self.ctl.set_fan_speed("cpu", pct)
-                        self.ctl.set_fan_speed("gpu", pct)
+                elif plan.enter:
+                    self.ctl.set_fan_mode("custom", False, False, plan.cpu, plan.gpu)
+                else:
+                    if plan.cpu is not None:
+                        self.ctl.set_fan_speed("cpu", plan.cpu)
+                    if plan.gpu is not None:
+                        self.ctl.set_fan_speed("gpu", plan.gpu)
             except WmiError as e:
                 log.warning("fan curve could not set the fans: %s", e)
                 self.curve.reset()  # try again from scratch next time
@@ -423,7 +423,7 @@ class Daemon:
             return {"ok": True, "ready": self.ready, "error": self.error,
                     "sensors": self.sensors(), "throttle": self.throttle.last,
                     "gpu_throttle": self.gpu_throttle, "state": st,
-                    "fan_curve": dict(self.curve.info, points=st["fan_curve"]["points"]), "ac": power.ac_online(),
+                    "fan_curve": dict(self.curve.info, **st["fan_curve"]), "ac": power.ac_online(),
                     "hw": {"lcd_overdrive": self.hw_lcd_overdrive, "coolboost": self.hw_coolboost,
                            "lcd_overdrive_supported": self.overdrive_supported,
                            "battery_limit": self.hw_battery_limit,
@@ -481,13 +481,18 @@ class Daemon:
                 self.fan_curve_step(0.0)  # start right away instead of waiting for the thread
 
     def cmd_set_fan_curve(self, req: dict) -> None:
+        with self.lock:
+            current = copy.deepcopy(self.state["fan_curve"])
         try:
-            points = fancurve.validate(req.get("points"))
+            cfg = fancurve.normalize(
+                req.get("points", current["points"]),
+                req.get("gpu_points", current.get("gpu_points")),
+                _bool(req["split"]) if "split" in req else current.get("split", False))
         except ValueError as e:
             raise ValidationError(str(e)) from e
         with self.fan_lock:
             with self.lock:
-                self.state["fan_curve"] = {"points": points}
+                self.state["fan_curve"] = cfg
                 self._save_state()
             if self.state["fan"]["mode"] == "curve":
                 self.fan_curve_step(0.0)

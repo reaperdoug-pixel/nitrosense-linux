@@ -21,7 +21,7 @@ def default_state(zone_colors: list[str] | None = None) -> dict:
     return {
         "fan": {"mode": "auto", "cpu_auto": False, "gpu_auto": False,
                 "cpu_percent": 50, "gpu_percent": 50},
-        "fan_curve": {"points": _default_curve()},
+        "fan_curve": {"points": _default_curve(), "gpu_points": _default_curve(), "split": False},
         "coolboost": None,
         "keyboard": {
             "mode": "static",

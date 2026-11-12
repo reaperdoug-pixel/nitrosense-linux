@@ -10,6 +10,10 @@ Safety rules that the curve cannot override:
     automatic mode (FanCurve.step reports release=True) until the sensors return
   * speed is raised at once but lowered only after the lower target has held for HOLD_S
     seconds, so the fans do not hunt up and down
+
+With "split" on, the CPU fan and the GPU fan each follow their own curve (the CPU fan the CPU
+temperature, the GPU fan the GPU temperature, or the CPU's while the dGPU is asleep). The safety
+rules stay shared: when either temperature reaches its limit, both fans go to 100 %.
 """
 
 from __future__ import annotations
@@ -89,7 +93,8 @@ class FanCurve:
         self.failsafe = False
         self.info: dict = {}
 
-    def step(self, points, cpu_temp, gpu_temp, dt: float) -> Decision:
+    def step(self, points, cpu_temp, gpu_temp, dt: float, source=None) -> Decision:
+        """`source` is the temperature this curve follows (default: the hottest sensor)."""
         temps = [t for t in (cpu_temp, gpu_temp) if t is not None]
         if not temps:
             self.bad += 1
@@ -101,7 +106,7 @@ class FanCurve:
         self.bad = 0
         if self.failsafe:  # sensors are back: take control again
             self.failsafe, self.applied = False, None
-        hottest = max(temps)
+        hottest = max(temps) if source is None else source
         safety = ((cpu_temp is not None and cpu_temp >= SAFETY_CPU)
                   or (gpu_temp is not None and gpu_temp >= SAFETY_GPU))
         target = 100 if safety else target_percent(points, hottest)
@@ -122,3 +127,65 @@ class FanCurve:
         self.info = {"failsafe": False, "temp": hottest, "percent": self.applied, "safety": safety,
                      "target": target}
         return decision
+
+
+def normalize(points, gpu_points=None, split: bool = False) -> dict:
+    """Validated curve configuration: {"points", "gpu_points", "split"}."""
+    points = validate(points)
+    gpu = validate(gpu_points) if gpu_points is not None else [list(p) for p in points]
+    return {"points": points, "gpu_points": gpu, "split": bool(split)}
+
+
+class Plan(NamedTuple):
+    cpu: int | None       # CPU fan speed to set now (None: leave it)
+    gpu: int | None       # GPU fan speed to set now
+    enter: bool           # first speeds after (re)start: switch the firmware to custom mode too
+    release: bool         # give the fans back to the firmware's automatic mode
+
+
+class FanCurves:
+    """One shared curve for both fans, or one curve per fan (cfg["split"])."""
+
+    def __init__(self, hold_s: float = HOLD_S, fail_limit: int = FAIL_LIMIT) -> None:
+        self.cpu_fan = FanCurve(hold_s, fail_limit)
+        self.gpu_fan = FanCurve(hold_s, fail_limit)
+        self._split: bool | None = None
+
+    def reset(self) -> None:
+        self.cpu_fan.reset()
+        self.gpu_fan.reset()
+        self._split = None
+
+    @property
+    def applied(self) -> int | None:
+        return self.cpu_fan.applied
+
+    @property
+    def failsafe(self) -> bool:
+        return self.cpu_fan.failsafe
+
+    @property
+    def info(self) -> dict:
+        info = dict(self.cpu_fan.info)
+        if self._split:
+            g = self.gpu_fan.info
+            info.update(gpu_temp=g.get("temp"), gpu_percent=g.get("percent"),
+                        gpu_target=g.get("target"), safety=info.get("safety") or g.get("safety", False))
+        return info
+
+    def step(self, cfg: dict, cpu_temp, gpu_temp, dt: float) -> Plan:
+        split = bool(cfg.get("split") and cfg.get("gpu_points"))
+        if self._split is not None and split != self._split:
+            self.reset()  # one curve became two (or the reverse): start from scratch
+        self._split = split
+        if not split:
+            d = self.cpu_fan.step(cfg["points"], cpu_temp, gpu_temp, dt)
+            return Plan(d.percent, d.percent, d.enter, d.release)
+        cpu_src = cpu_temp if cpu_temp is not None else gpu_temp
+        gpu_src = gpu_temp if gpu_temp is not None else cpu_temp  # dGPU asleep: follow the CPU
+        dc = self.cpu_fan.step(cfg["points"], cpu_temp, gpu_temp, dt, cpu_src)
+        dg = self.gpu_fan.step(cfg["gpu_points"], cpu_temp, gpu_temp, dt, gpu_src)
+        enter = dc.enter or dg.enter
+        cpu = dc.percent if dc.percent is not None else (self.cpu_fan.applied if enter else None)
+        gpu = dg.percent if dg.percent is not None else (self.gpu_fan.applied if enter else None)
+        return Plan(cpu, gpu, enter, dc.release or dg.release)
