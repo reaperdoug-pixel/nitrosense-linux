@@ -1,136 +1,66 @@
 # NitroSense for Linux
 
-**Fan control, RGB keyboard lighting, power plans and hardware monitoring for Acer
-Nitro laptops on Linux, with the look and behaviour of Acer NitroSense for Windows.**
+**A monitoring and control dashboard for Acer Nitro laptops on Linux: fan control with an
+automatic curve, SSD and battery health, history, power, throttling detection, alerts and
+more.**
 
-NitroSense for Linux is a port of Acer **NitroSense 3.01.3056**, rebuilt from the
-Windows application itself: the window uses the same layout, coordinates, colours,
-images and vector icons. The background service sends the firmware the same WMI
-commands, bit for bit, that the Windows service sends. Settings survive reboots,
-suspend/resume and plugging or unplugging the charger, as they do on Windows.
+This is a fork of [napejoon/nitrosense-linux](https://github.com/napejoon/nitrosense-linux), a
+port of Acer NitroSense 3.01 for Windows. The fork keeps the part that makes it work, a root
+service that talks to the Acer firmware with the same WMI commands Windows NitroSense sends,
+and replaces the Windows-style window with a new dashboard. It was developed on an **Acer Nitro
+ANV15-51** (Intel + GeForce RTX 3050) running Linux Mint 22.
+The interface is in **Brazilian Portuguese**.
 
-> 🇹🇭 **ภาษาไทย**: ดูหัวข้อ [คู่มือภาษาไทย](#คู่มือภาษาไทย) ด้านล่าง
+> 🇧🇷 [Guia em português](docs/README.pt-BR.md) · 🇹🇭 [คู่มือภาษาไทย](docs/README.th.md) (upstream's, for the original window)
 
 ---
 
 ## Contents
 
-- [Features](#features)
+- [Highlights](#highlights)
 - [Supported hardware](#supported-hardware)
 - [Requirements](#requirements)
 - [Installation](#installation)
-- [Using NitroSense](#using-nitrosense)
-- [NitroSense key](#nitrosense-key)
+- [Using the dashboard](#using-the-dashboard)
+- [Alerts](#alerts)
+- [Safety](#safety)
 - [How it works](#how-it-works)
-- [Firmware interface reference](#firmware-interface-reference)
 - [Files and configuration](#files-and-configuration)
 - [Service API](#service-api)
+- [Firmware interface reference](#firmware-interface-reference)
 - [Security model](#security-model)
 - [Troubleshooting](#troubleshooting)
 - [Uninstall](#uninstall)
 - [Development](#development)
-- [How this port was made](#how-this-port-was-made)
-- [Limitations and differences from Windows](#limitations-and-differences-from-windows)
-- [คู่มือภาษาไทย](#คู่มือภาษาไทย)
+- [Origin and credits](#origin-and-credits)
+- [Limitations](#limitations)
 - [Disclaimer](#disclaimer)
 - [License](#license)
 
 ---
 
-## Features
+## Highlights
 
-### Fan Control
-- **Auto**: the embedded controller (EC) manages the fans (factory behaviour).
-- **Max**: both fans at full speed.
-- **Custom**: separate sliders for the **CPU** and **GPU** fan, 0–100 % in 10 % steps,
-  each with its own **Auto** switch (that fan stays automatic while the other is manual).
-- **CoolBoost™**: raises the maximum fan speed in Auto mode. As on Windows, the switch
-  only works in Auto mode and is greyed out in Max/Custom.
-- Live **RPM** for both fans, with fans that spin faster as the RPM rises (same speed
-  formula as NitroSense).
+| Tab | What it shows or does |
+|---|---|
+| **Início** (Home) | CPU and GPU temperature gauges, fan RPM, power in watts, GPU load, the performance state (normal, or held back by heat or power) with the CPU clock, scenario summary, SSD and battery health at a glance. |
+| **Cenário** (Scenario) | Power plans for AC and battery, and fan control: **Auto**, **Max**, **Custom** (CPU and GPU sliders), **Curve** (a draggable temperature/speed graph with safety rules) and **CoolBoost**. |
+| **Discos** (Disks) | NVMe health from SMART: wear, spare capacity, power-on hours, data written and read, unsafe shutdowns, media errors, temperature, file-system use, plain-language advice. |
+| **Bateria** (Battery) | Health (full-charge capacity against the original), cycles, charge, power draw, time left, history charts, and a switch to **limit charging to about 80 %**. |
+| **Monitoramento** (Monitoring) | Live 12-minute charts of CPU and GPU temperature and load, with watts and clocks. |
+| **Processos** (Processes) | The heaviest programs by CPU, memory and GPU, and what keeps the discrete GPU awake. |
+| **Histórico** (History) | 1 hour to 30 days of temperatures, CPU and GPU power, CPU frequency with throttled periods marked, battery charge and draw, and the SSD wear trend. |
 
-### Monitoring
-- CPU and GPU **temperature** (red) and **load** (orange), refreshed every second.
-- **Power in watts**: CPU package power from the Intel RAPL counters (read by the service,
-  which runs as root: the counters are root-only) and GPU power from NVML (only while the dGPU
-  is already awake). Shown on the Home tab and in the Monitoring header; the History tab charts
-  both with the average, peak and an estimate of the energy used in the period. The service also
-  records the iGPU and platform (psys) power for later use.
-- **Throttling detection**: the service checks every 2 s whether the CPU is being held back,
-  using kernel interfaces only: hardware thermal throttle counters, thermald/DPTF cooling
-  devices, package power against its limits and the frequency cap. Home shows the state and the
-  clock (e.g. "CPU 3,3 de 4,6 GHz") and the thermal protection point (Tjmax minus the TCC
-  offset); a desktop alert appears after 10 s of continuous thermal throttling. The History
-  tab charts the CPU frequency with the throttled periods shaded. The dGPU's clock and NVML
-  slowdown reasons are shown while it is awake.
-- **Processes tab**: the heaviest programs by CPU (share of the whole processor) and by
-  memory (private resident pages, so shared libraries are not counted per process), grouped by
-  program (a browser is one row). GPU users come from `nvidia-smi pmon`, run only while the dGPU
-  is awake so monitoring never wakes it. A last card lists the programs holding `/dev/nvidia*`
-  open, i.e. what keeps the dGPU from suspending; the service provides it because other users'
-  file descriptors need root (`gpu_holders` command).
-- **Fan curve** (Scenario tab, "Curva" mode): drag the points of a temperature/speed graph (or
-  pick Quiet / Balanced / Performance); the service follows the hottest of the CPU and the
-  awake GPU every 2 s and drives both fans in custom mode. Safety rules the curve cannot
-  override: speeds never below 20 % and the curve must reach 100 % by 90 C; 100 % at 88 C (CPU) /
-  82 C (GPU) whatever the curve says; speed rises at once but falls only after the lower target
-  held for 8 s; if every temperature sensor fails the fans go back to the firmware's automatic
-  mode; the fans are also handed back to automatic when the service stops.
-- **Battery tab**: health (full-charge capacity against the original design, from
-  `/sys/class/power_supply`), cycles, charge, power draw and time left (smoothed over the last
-  minute), voltage and temperature when the firmware reports it, with plain-language advice.
-  Charge and power history charts use the service's history; the health trend is logged every
-  6 h. Only a critical battery problem raises a desktop alert. A switch limits charging to
-  about 80 % (Acer's "battery health mode", read and set through the same WMI interface as the
-  `acer-wmi-battery` driver); it appears only if the firmware reports it. `tools/probe_battery.py`
-  is a read-only check for it.
-- **History tab**: the service samples CPU/GPU/SSD temperature, fan speed and CPU load every
-  30 s, even with the window closed, and keeps 30 days in `/var/lib/nitrosense/history/`.
-  The tab shows 1 h to 30 d charts (average, peak, CPU load), min/avg/max, minutes spent
-  above the attention limits, and the SSD wear trend (SMART counters logged every 6 h).
-- **Alerts with the window closed**: `nitrosense-watch` starts with the desktop session and
-  sends desktop notifications for high CPU/GPU temperature, a stopped fan and SSD health
-  problems (new or worse alerts; critical ones repeat every 30 min). To disable it for one
-  user, copy `/etc/xdg/autostart/nitrosense-watch.desktop` to `~/.config/autostart/` and add
-  `Hidden=true`.
-- 12-minute history charts (720 samples), with **Min/Max** over the visible history.
-- Hover over a chart to see the time, temperature and load at that point.
-- Temperatures in **°C or °F**.
-- If the discrete GPU is powered down, the chart shows *"Discrete GPU is idle."* and
-  monitoring does not wake it up.
+Behind the window:
 
-### Power Plan
-- Separate plans for **AC** and **Battery**: Power Saver, Balance, High-Performance.
-- Switches automatically when the charger is plugged in or removed.
-- Stays in sync with GNOME's power mode menu through power-profiles-daemon.
-
-### Keyboard lighting (4-zone RGB)
-- **Static**: one colour per zone, each zone on/off, brightness 1–5.
-- **Dynamic**: Breathing, Wave, Zoom, Shifting and Neon, with speed 1–9, direction
-  (left/right) for Wave and Shifting, and a colour choice where the firmware supports it.
-- Colour picker with NitroSense's 9 basic colours, 9 recent colours and a full
-  colour dialog (*More color…*).
-- Animated keyboard preview.
-
-### Settings (gear icon)
-- **Sticky keys** (GNOME accessibility setting).
-- **Windows and menu key** (Super/Menu key lock, done in firmware).
-- **Temperature units** °C / °F.
-- **LCD Overdrive** (panel response-time boost). Only shown when the panel supports it, as on
-  Windows (where it depends on the factory flag `LCD_Overdrive_support`). The AN515-44's panel
-  doesn't: the firmware accepts the command but the setting never takes effect.
-- **Backlight off after 30 seconds** (keyboard backlight timeout). Only shown when the BIOS
-  answers the request; the AN515-44 BIOS rejects it (`0xE2`).
-- **Discrete GPU only**: appears only if the BIOS reports a GPU switch (not on AN515-44).
-
-### NitroSense key
-- The **NitroSense key** on the keyboard opens NitroSense, or brings it to the front if it is
-  already open, as on Windows.
-
-### Service
-- Re-applies fan mode, CoolBoost, keyboard lighting, LCD Overdrive, the Win-key lock,
-  the backlight timeout and power plans **at boot**, **after resume** and on **AC changes**.
-- The GUI can be closed at any time; settings stay in effect.
+- **A service that never sleeps.** `nitrosensed` runs as root, re-applies your settings at
+  boot, after resume and when you plug or unplug the charger, and records the history around
+  the clock, even with the window closed.
+- **Alerts with the window closed.** `nitrosense-watch` sends desktop notifications for high
+  temperatures, a stopped fan, SSD or battery trouble, and sustained thermal throttling.
+- **Never wakes the discrete GPU.** NVML and `nvidia-smi` are used only while the GPU is
+  already awake, so monitoring does not stop it from saving power.
+- **The NitroSense key** on the keyboard opens the dashboard.
 
 ---
 
@@ -138,40 +68,57 @@ suspend/resume and plugging or unplugging the charger, as they do on Windows.
 
 | Status | Models |
 |---|---|
-| ✅ Tested | **Acer Nitro AN515-44** (Ryzen 4000 + GTX 1650 Ti, BIOS V1.04), Ubuntu 24.04, kernel 7.0 |
-| 🟡 Should work (same NitroSense layout, `MachineType=1`), untested | AN515-43, AN515-45, AN515-51s, AN515-54, AN515-55, AN515-56, AN515-57, AN517-41, AN517-51, AN517-52, AN517-53, AN517-54, AN715-41, AN715-51, AN715-52, N9500-A, T9300 |
-| ❌ Not supported (different NitroSense UI) | `MachineType=2` models with operation modes (AN515-46/47/58, AN517-42/43/55, Nitro ANX), and older `MachineType=0` models |
+| ✅ Developed and tested | **Acer Nitro ANV15-51** (Intel, GeForce RTX 3050 6 GB), Linux Mint 22.3, kernel 7.0 |
+| ✅ Tested by the upstream project | **Acer Nitro AN515-44** (Ryzen 4000 + GTX 1650 Ti, BIOS V1.04), Ubuntu 24.04 |
+| 🟡 Should work (same WMI interface, `MachineType=1`), untested | AN515-43, AN515-45, AN515-51s, AN515-54, AN515-55, AN515-56, AN515-57, AN517-41, AN517-51, AN517-52, AN517-53, AN517-54, AN715-41, AN715-51, AN715-52, N9500-A, T9300 |
+| ❌ Not supported (different NitroSense) | `MachineType=2` models with operation modes (AN515-46/47/58, AN517-42/43/55, Nitro ANX), and older `MachineType=0` models |
 
-The installer reads `Plugs/<your model>/*.ini` from the NitroSense package, so per-model
-settings (fan count, lighting type, default colours, colour calibration, visible options)
-match what Windows uses for your laptop.
+What depends on the hardware:
 
-On an untested model, start with the read-only probe (`sudo python3 -I tools/probe.py`)
-and check that the temperatures and RPM it prints look right. Then confirm the WMI
-method numbers in your BIOS (see [Firmware interface reference](#firmware-interface-reference)).
+| Feature | Needs |
+|---|---|
+| Fan control, sensors, CoolBoost, power plans | The Acer WMI methods (`AcerGamingFunction`) and the `acpi_call` module |
+| CPU power in watts | Intel RAPL counters under `/sys/class/powercap` (Intel; AMD untested) |
+| CPU throttling detection | The kernel's `thermal_throttle` counters and thermal cooling devices (Intel) |
+| Disk health | An **NVMe** drive (SATA drives are not covered) |
+| GPU power, clock and slowdown reasons | An NVIDIA GPU with the proprietary driver (`libnvidia-ml`) |
+| GPU per-program use | `nvidia-smi` |
+| Battery charge limit | The Acer battery health WMI interface (GUID `79772EC5-…`); the switch appears only when the firmware reports it |
+| Keyboard lighting | The service supports it, but the dashboard has no lighting panel (see [Limitations](#limitations)); the ANV15-51 firmware rejects the backlight command anyway |
+
+Per-model options (fan count, lighting type, visible settings) come from `Feature.ini` and
+`HW_Support.ini`. The repository bundles the ANV15-51 files in `data/models/`; for another
+model the installer can take them from the Windows NitroSense package (`Plugs/<model>/`).
+
+On an untested model, start with the read-only probe, `sudo python3 -I tools/probe.py`, and
+check that the temperatures and RPM it prints look right.
 
 ---
 
 ## Requirements
 
-- Acer Nitro laptop (see above), Ubuntu 24.04 or another Debian-based distribution with
-  **GTK 4.10+**, Python 3.10+.
-- The **NitroSense package for Windows** for your model, downloaded from Acer's support
-  site (e.g. `Nitro Sense_Acer_3.01.3056_W10x64_A`). Unzip it anywhere.
+- An Acer Nitro laptop (see above) running **Linux Mint 22 / Ubuntu 24.04** or another
+  Debian-based distribution with **GTK 4.10+** and Python 3.10+.
 - Installed automatically: `python3-gi`, `python3-gi-cairo`, `python3-cairo`,
   `gir1.2-gtk-4.0`, `acpi-call-dkms`.
-- **Secure Boot**: `acpi_call` is an out-of-tree kernel module built by DKMS. With Secure
-  Boot on, DKMS signs it with your Machine Owner Key (MOK). If you have never enrolled a
-  MOK, Ubuntu asks you to set a password while installing and to enrol the key on the
-  next reboot (blue *MOK management* screen → *Enroll MOK*).
+- **Secure Boot**: `acpi_call` is an out-of-tree module built by DKMS. With Secure Boot on,
+  DKMS signs it with your Machine Owner Key (MOK). If you have never enrolled one, the system asks
+  for a password during installation and for *Enroll MOK* on the next boot (blue screen).
+- Optional: the NVIDIA driver for the GPU readings. If `thermald` or Intel DPTF is running, its
+  limits show up in the throttling detection through the thermal cooling devices.
+- Optional: the **NitroSense package for Windows** of your model. It is only used for the
+  per-model `.ini` files of models not bundled here and for the app icon; the dashboard itself
+  uses no Acer artwork.
 
 ---
 
 ## Installation
 
 ```bash
-git clone https://github.com/napejoon/nitrosense-linux.git
+git clone https://github.com/reaperdoug-pixel/nitrosense-linux.git
 cd nitrosense-linux
+sudo ./install.sh                       # bundled model files and icon
+# or, to read the model files and icon from your own NitroSense package:
 sudo ./install.sh "/path/to/Nitro Sense_Acer_3.01.3056_W10x64_A"
 ```
 
@@ -179,112 +126,192 @@ What the installer does:
 
 1. Checks that the machine is an Acer and installs the dependencies.
 2. Loads `acpi_call` and sets it to load at boot.
-3. Runs a **read-only hardware probe** (only getter methods: temperatures, fan RPM,
-   CoolBoost/Overdrive/backlight state). If the values look wrong, it stops and installs
-   nothing else.
+3. Runs a **read-only hardware probe** (getter methods only). If the values look wrong it
+   stops and installs nothing else.
 4. Copies the program to `/opt/nitrosense`.
-5. Extracts the NitroSense artwork, fonts, icons and English strings from **your**
-   package into `/usr/share/nitrosense/assets`. Nothing from the package is executed.
-6. Copies your model's `Plugs/<model>/*.ini` to `/etc/nitrosense/model/`.
+5. With a package: extracts its artwork into `/usr/share/nitrosense/assets` (nothing from it is
+   executed). Without one: uses the project's own icon.
+6. Copies the model files (`data/models/<model>/` or the package's `Plugs/<model>/`) to
+   `/etc/nitrosense/model/`.
 7. Lets the user who ran `sudo` talk to the service.
-8. Installs the menu entry, the icon and the `nitrosense` command.
-9. Sets up the **NitroSense key**: a udev hwdb rule remaps it to `XF86Launch1`, and a GNOME
-   keyboard shortcut for your user opens NitroSense with it (see [NitroSense key](#nitrosense-key)).
+8. Installs the menu entry, the icon, the `nitrosense` command and the **alert watcher**
+   autostart (`/etc/xdg/autostart/nitrosense-watch.desktop`).
+9. Sets up the **NitroSense key** (see [below](#the-nitrosense-key)).
 10. Enables and starts the `nitrosensed` service.
 
-Then open **NitroSense** from the application menu, or run:
+Then open **NitroSense** from the application menu, or run `nitrosense`. The watcher starts
+with your next login; to start it now run `setsid /opt/nitrosense/bin/nitrosense-watch &`.
 
-```bash
-nitrosense
-```
-
-To update to a newer version, `git pull` and run the installer again. Your settings in
-`/var/lib/nitrosense` are kept.
-
----
-
-## Using NitroSense
-
-| Area | What to do |
-|---|---|
-| **Title bar** | Drag to move the window. Icons from right to left: close, minimise, settings (gear), keyboard lighting (keyboard icon). |
-| **Fan Control** | Click **Auto**, **Max** or **Custom**. In Custom, drag or scroll a slider to set that fan's speed; the value is sent when you release it. **Auto** under a slider puts only that fan back on automatic. |
-| **CoolBoost™** | Switch at the top right of the fan panel; the ⓘ icon explains it. Only active in Auto mode. |
-| **Power Plan** | Pick the **AC** or **Battery** tab, then a plan. The plan for the current power source is applied immediately; the other one applies when you plug in or unplug. |
-| **Monitoring** | Read-only. Hover over a chart for the values at that moment. |
-| **Gear menu** | Switches for sticky keys, the Win key, °C/°F, LCD Overdrive and backlight timeout. Click outside or press Esc to close. |
-| **Keyboard lighting** | Choose **Static** or **Dynamic** and set brightness with the slider at the top. Static: switch zones on/off and click a zone's colour square to pick a colour. Dynamic: choose an effect, speed, direction and colour. Every change goes to the keyboard immediately. Esc or ✕ closes the panel. |
-
-Closing the window only closes the GUI. The service keeps the fans and lighting as you
-left them.
+**Updating**: `git pull` and run the installer again. Your settings and the history in
+`/var/lib/nitrosense` are kept. After an update restart the watcher
+(`pkill -f nitrosense-watch`, then start it again), since the installer does not touch a running
+one.
 
 ---
 
-## NitroSense key
+## Using the dashboard
 
-The key with the NitroSense logo sends AT scancode
-**0xf5**. Windows NitroSense's admin agent watches raw keyboard input for exactly this key
-(`RAWKEYBOARD.MakeCode == 0x75`, i.e. 0xf5 without the release bit) and starts the app.
+Closing the window only closes the GUI. The service keeps your settings and keeps recording.
+The last tab you used and the temperature unit (°C/°F) are remembered per user.
 
-On Linux, systemd's keyboard database maps this scancode to `KEY_PRESENTATION` (keycode 425).
-X11 cannot deliver keycodes above 247, so the desktop never sees the key. The installer
-therefore:
+### Início (Home)
+Temperature gauges for the CPU and GPU with fan RPM and power in watts, GPU load, and a status
+chip: **Desempenho normal**, **CPU limitada por calor** or **no limite de potência**, with the CPU
+clock (for example "CPU 3,3 de 4,6 GHz") and the temperature where the processor starts
+protecting itself. A banner on top shows the most serious [alert](#alerts).
 
-1. adds `/etc/udev/hwdb.d/61-nitrosense.hwdb`, which remaps scancode `f5` to `prog1`
-   (`XF86Launch1`) on Acer Nitro machines. systemd already does the same for the
-   Predator "PredatorSense" button.
-2. registers a GNOME custom shortcut *NitroSense*: `XF86Launch1` → `/opt/nitrosense/bin/nitrosense`.
-   You can see or change it in *Settings → Keyboard → Custom Shortcuts*.
+### Cenário (Scenario)
+- **Power plan**: separate plans for AC and battery (Power Saver, Balance, High-Performance),
+  switched automatically when you plug or unplug the charger.
+- **Fan control**: **Auto** (the firmware decides), **Max**, **Custom** (CPU and GPU sliders,
+  0–100 % in 10 % steps, each with its own Auto switch), **Curve** and **CoolBoost** (higher
+  maximum speed in Auto mode only).
+- **Curve**: drag the points of a temperature/speed graph, or pick *Silencioso*, *Equilibrado*
+  or *Desempenho*. The service follows the hottest of the CPU and the awake GPU every 2 s and
+  drives both fans. A dashed line shows the current temperature. See [Safety](#safety) for the
+  rules the curve cannot override.
 
-Other desktops (KDE, XFCE, …): bind the key `XF86Launch1` (shows as *Launch (1)*) to
-`/opt/nitrosense/bin/nitrosense` in that desktop's shortcut settings. To check what any key
-sends, run `sudo python3 -I tools/keyprobe.py 20` and press it.
+### Discos (Disks)
+For each NVMe drive: a health chip (Saudável / Atenção / Crítico), temperature, wear, spare
+capacity, hours, data written and read, power cycles, unsafe shutdowns, media errors, a 12-minute
+temperature chart, file-system use and advice. SMART needs root, so the service reads it.
 
-Re-register the GNOME shortcut manually (as your user):
-```bash
-cd /opt/nitrosense && python3 -m nitrosense.shortcut install   # or: remove / status
-```
+### Bateria (Battery)
+Health is the full-charge capacity against the design capacity, read from
+`/sys/class/power_supply`. Also shown: cycles, charge, power draw and time left (smoothed over the
+last minute), voltage and, if the firmware reports it, temperature. Charge and power charts and the
+health trend use the history. **Limitar a carga a 80 %** switches the firmware's battery health
+mode: charging stops near 80 %, which slows wear when the laptop stays plugged in. The service
+re-applies it after every boot and resume.
+
+### Monitoramento (Monitoring)
+Live charts of the last 12 minutes (one sample per second) for the CPU and the GPU: temperature
+(purple line) and load (lilac area), with the current temperature, load, watts and clock in the
+header. If the discrete GPU is powered down the chart says so instead of waking it.
+
+### Processos (Processes)
+- The heaviest programs by **CPU** (share of the whole processor), **memory** (private resident
+  pages, so shared libraries are not counted per process) and **GPU** (memory and utilisation from
+  `nvidia-smi pmon`). Programs with many processes, such as a browser, are one row.
+- **O que mantém a GPU dedicada acordada**: the programs holding `/dev/nvidia*` open, which is what
+  keeps the discrete GPU from suspending. The service provides this because other users' file
+  descriptors need root.
+
+### Histórico (History)
+Pick 1 hour, 6 hours, 24 hours, 7 days or 30 days. Charts for CPU, GPU and SSD temperature, CPU and
+GPU power with the average, peak and the estimated energy used, CPU frequency with the periods of
+thermal throttling shaded red, and a summary of the SSD wear trend. Details of what is recorded
+are in [Files and configuration](#files-and-configuration).
+
+### Settings (gear icon)
+Sticky keys (GNOME), Windows/menu key lock (in firmware), temperature unit, and the options the
+model supports: **Use only the discrete GPU**, **LCD Overdrive** and **keyboard backlight off after
+30 s**. Options the firmware does not support are hidden.
+
+### The NitroSense key
+The key with the NitroSense logo sends AT scancode `0xf5`, which systemd maps to
+`KEY_PRESENTATION` (keycode 425). X11 cannot deliver keycodes above 247, so the desktop never sees
+it. The installer therefore adds `/etc/udev/hwdb.d/61-nitrosense.hwdb`, which remaps it to
+`prog1` (`XF86Launch1`), and registers a GNOME custom shortcut *NitroSense*: `XF86Launch1` →
+`/opt/nitrosense/bin/nitrosense`. On other desktops, bind `XF86Launch1` to that command yourself.
+To check what any key sends: `sudo python3 -I tools/keyprobe.py 20` and press it. To re-register
+the GNOME shortcut as your user: `cd /opt/nitrosense && python3 -m nitrosense.shortcut install`
+(or `remove` / `status`).
+
+---
+
+## Alerts
+
+Alerts appear in a banner on top of the window and as desktop notifications. A notification is
+sent when an alert is new or gets worse. With `nitrosense-watch` running it sends them (also with
+the window closed), repeats a critical one that persists every 30 minutes, and the window stays
+quiet, so you never get a duplicate.
+
+| Source | Attention | Critical |
+|---|---|---|
+| CPU temperature | 90 °C | 97 °C |
+| GPU temperature | 85 °C | 92 °C |
+| Fan | | 0 RPM while the temperature is 75 °C or more |
+| CPU thermal throttling | 10 s or more in a row | |
+| GPU thermal slowdown (window only) | reported by NVML | |
+| SSD wear | 80 % or more | 100 % |
+| SSD spare capacity | below 50 % | at or below the drive's threshold |
+| SSD critical-warning flags | volatile-memory backup failure | spare, reliability or read-only flags |
+| SSD media errors | 1 or more | 10 or more |
+| SSD temperature | within 10 °C of the drive's warning limit | at that limit |
+| File system | 90 % full | 95 % full |
+| Battery | | health below 60 % or cells at 60 °C or more |
+
+Battery *attention* (health below 80 %, 1000 cycles, 50 °C) is shown in the Battery tab but does
+not raise a notification, so it does not repeat at every login.
+
+To turn the watcher off for one user, copy `/etc/xdg/autostart/nitrosense-watch.desktop` to
+`~/.config/autostart/` and add the line `Hidden=true`.
+
+---
+
+## Safety
+
+The service writes to firmware, so the risky features have guard rails.
+
+**Fan curve** (rules the curve cannot override):
+- Speeds are never below 20 %, and a curve must reach 100 % by 90 °C. The service refuses others.
+- At **88 °C (CPU)** or **82 °C (GPU, when awake)** the fans go to 100 % whatever the curve says.
+- Speed rises at once but falls only after the lower target has held for 8 s, so the fans do not
+  hunt up and down.
+- If every temperature sensor fails for a few samples, the fans go back to the firmware's
+  automatic mode and the curve resumes when the sensors return.
+- When the service stops or restarts it hands the fans back to automatic. It restores the curve
+  after boot or resume. If the service is killed abruptly the fans keep their last speed until it
+  restarts (a few seconds).
+- The curve is covered by unit tests against a simulated firmware. Check it on your machine before
+  relying on it: choose **Curve**, watch temperatures and RPM under load, and go back to **Auto** if
+  anything looks wrong.
+
+**Battery charge limit**: uses the same WMI interface as the `acer-wmi-battery` driver. The service
+reads the state back after every change and reports an error if the firmware did not accept it.
+`tools/probe_battery.py` is a read-only check for it.
+
+**Discrete GPU**: nothing in the app wakes it. NVML and `nvidia-smi` are used only while the PCI
+runtime status is *active*.
 
 ---
 
 ## How it works
 
 ```
- Windows                                         Linux (this project)
- ───────                                         ────────────────────
- NitroSense.exe (WPF)                            nitrosense (GTK 4, your user)
-        │ named pipe                                    │ Unix socket, JSON lines
-        ▼ "PredatorSense_service_namedpipe"             ▼ /run/nitrosense/nitrosense.sock
- NitroSense service (root, native)               nitrosensed (root, Python)
-        │ WMI: root\WMI                                 │ /proc/acpi/call  (acpi_call module)
-        ▼ AcerGamingFunction / APGeAction               ▼
-                 \_SB.PCI0.WMID.WMBH  /  \_SB.PCI0.WMID.WMAA   (ACPI, same methods)
-                                        │
-                                        ▼
-                     Embedded controller / BIOS SMM (fans, RGB, panel)
+ nitrosense  (GTK 4, your user)          nitrosense-watch  (your user)
+        │  Unix socket, JSON lines              │  same socket
+        ▼  /run/nitrosense/nitrosense.sock      ▼
+ ┌──────────────────────────────────────────────────────────────┐
+ │ nitrosensed (root, Python, systemd)                          │
+ │  sensors · fan control and curve · SMART · RAPL · throttling │
+ │  history recorder (every 30 s) · persistent state            │
+ └──────────────────────────────────────────────────────────────┘
+        │ /proc/acpi/call (acpi_call)            │ /sys, /proc, NVMe ioctl
+        ▼ \_SB.PC00.WMID.WMBH / WMAA / WMBE      ▼
+ Embedded controller / BIOS (fans, sensors, battery)    kernel interfaces
 ```
 
-- **`nitrosense/encoders.py`**: one pure function per NitroSense method. Each turns
-  a setting into the exact 64-bit value Windows NitroSense sends (unit-tested against
-  values taken from the decompiled IL).
-- **`nitrosense/wmi.py`**: resolves the ACPI path from sysfs (`/sys/bus/wmi/devices/<GUID>`)
-  and calls only the 12 allowed methods, each with a fixed input size.
-- **`nitrosense/controller.py`**: call sequences. For example, static lighting is
-  *backlight mode/brightness → 4 zone colours → zone on/off mask*, in that order, as
-  `Popup_Lighting` does on Windows.
-- **`nitrosense/daemon.py`**: the root service: socket server with per-connection
-  `SO_PEERCRED` authorisation, persistent state, re-applying settings at startup, on
-  logind `PrepareForSleep(false)` (resume) and on AC changes.
-- **`nitrosense/power.py`**: power plans: CPU governor, CPU boost and power-profiles-daemon.
-- **`nitrosense/sysmon.py`**: CPU load from `/proc/stat`, NVIDIA load/temperature
-  through NVML. NVML is only opened while the GPU is already awake, and is released again
-  on GPUs with runtime D3, so monitoring never stops the dGPU from sleeping.
-- **`nitrosense/extract.py`, `geometry.py`**: read the `.appxbundle` → `Win32/NitroSense.exe`
-  → .NET manifest resources → `.resources` → PNG/TTF/BAML. The BAML parser and WPF
-  path-geometry decoder recover the icons as SVG paths.
-- **`nitrosense/gui/`**: the window (`window.py`), controls that redraw the original WPF
-  templates such as hexagon toggles, fan/power-plan buttons, sliders, tabs and charts
-  (`controls.py`), the lighting panel (`lighting.py`) and the asset/icon renderer (`theme.py`).
+| Module | Role |
+|---|---|
+| `nitrosense/daemon.py` | The root service: socket server with per-connection `SO_PEERCRED` authorisation, persistent state, re-applying settings at boot, after resume and on AC changes, the fan curve, throttle and history threads. |
+| `nitrosense/encoders.py` | One pure function per firmware method: turns a setting into the exact 64-bit value Windows NitroSense sends (unit-tested against values from the decompiled IL). |
+| `nitrosense/wmi.py` | Resolves the ACPI path from sysfs and calls only the 15 allowed methods, each with a fixed input size. |
+| `nitrosense/controller.py` | Call sequences (fan modes, lighting, battery limit, …). |
+| `nitrosense/fancurve.py` | The fan curve: validation, interpolation and the safety state machine. |
+| `nitrosense/disks.py` | NVMe SMART through the admin ioctl, health assessment and advice. |
+| `nitrosense/battery.py` | Battery reading, health assessment, time left. |
+| `nitrosense/rapl.py` | CPU power in watts from the RAPL energy counters. |
+| `nitrosense/throttle.py` | CPU throttling detection from kernel counters and cooling devices. |
+| `nitrosense/sysmon.py` | CPU load; NVIDIA load, temperature, power, clock and slowdown reasons through NVML, only while the GPU is awake. |
+| `nitrosense/procs.py` | Per-program CPU and memory from `/proc`, GPU per-program use, and the processes holding `/dev/nvidia*`. |
+| `nitrosense/history.py` | The 30-day history: per-day JSON-lines files, bucketing, summaries. |
+| `nitrosense/alerts.py` | The alert rules (a pure function shared by the window and the watcher). |
+| `nitrosense/watcher.py` | The background notifier (`nitrosense-watch`), talking to the notification daemon over D-Bus. |
+| `nitrosense/power.py` | Power plans: CPU governor, boost and power-profiles-daemon. |
+| `nitrosense/gui/window.py`, `widgets.py` | The dashboard and its widgets (gauges, charts, the curve editor) and CSS. |
+| `nitrosense/extract.py`, `geometry.py`, `iconmaker.py` | Read an optional Windows package (artwork, icon). `gui/controls.py`, `gui/theme.py` and `gui/lighting.py` are helpers and the lighting panel from the original window. |
 
 ### Power plan mapping
 
@@ -298,10 +325,79 @@ Windows switches Windows power schemes. Linux has none, so each plan maps to:
 
 ---
 
+## Files and configuration
+
+| Path | Purpose |
+|---|---|
+| `/opt/nitrosense/` | program (`bin/nitrosense`, `bin/nitrosensed`, `bin/nitrosense-watch`, the package) |
+| `/usr/local/bin/nitrosense` | GUI launcher |
+| `/etc/nitrosense/model/` | `Feature.ini`, `HW_Support.ini` of your model |
+| `/etc/nitrosense/allowed-users` | users allowed to control the hardware (one per line) |
+| `/etc/nitrosense/wmi.json` | optional WMI method-number overrides |
+| `/var/lib/nitrosense/state.json` | saved settings (fan mode, fan curve, battery limit, power plans, …) |
+| `/var/lib/nitrosense/history/history-YYYYMMDD.jsonl` | one sample every 30 s, 30 days kept |
+| `/var/lib/nitrosense/history/smart.jsonl`, `battery.jsonl` | SSD and battery health counters, every 6 h, never pruned |
+| `~/.config/nitrosense/gui.json` | per-user GUI preferences (unit, last tab, history range) |
+| `/etc/systemd/system/nitrosensed.service` | service unit |
+| `/etc/xdg/autostart/nitrosense-watch.desktop` | starts the alert watcher with the desktop session |
+| `/etc/modules-load.d/nitrosense.conf` | loads `acpi_call` at boot |
+| `/usr/share/applications/io.github.napejoon.NitroSense.desktop` | menu entry (app ID `io.github.napejoon.NitroSense`) |
+| `/etc/udev/hwdb.d/61-nitrosense.hwdb` | NitroSense key → `XF86Launch1` |
+| GNOME setting `custom-keybindings/nitrosense/` | shortcut: NitroSense key → open NitroSense |
+
+A history sample holds: CPU, GPU and SSD temperature, fan RPM, CPU load, battery charge and power
+draw, CPU/GPU/platform power, mean CPU frequency, and the share of the interval spent thermally or
+power limited. Missing readings (for example the GPU while it is asleep) are left out, not zeroed.
+
+To let another user control the hardware:
+
+```bash
+echo otheruser | sudo tee -a /etc/nitrosense/allowed-users
+```
+
+---
+
+## Service API
+
+The service listens on `/run/nitrosense/nitrosense.sock` and takes one JSON object per line. You can
+script it, for example from Python:
+
+```python
+import sys; sys.path.insert(0, "/opt/nitrosense")
+from nitrosense.client import Client
+c = Client()
+print(c.request("status")["sensors"])   # cpu_temp, gpu_temp, cpu_fan, gpu_fan, cpu_power, igpu_power, sys_power
+c.request("set_fan", mode="max")
+c.request("set_fan", mode="custom", cpu_percent=60, gpu_percent=40, cpu_auto=False, gpu_auto=False)
+c.request("set_fan", mode="auto")
+```
+
+| Command | Arguments and reply |
+|---|---|
+| `status` | none; sensors, `throttle`, `fan_curve` (live state), saved `state`, firmware state (`hw`), AC status |
+| `disks` | none; SMART data per NVMe controller |
+| `history` | `range` 1h/6h/24h/7d/30d; bucketed series, summaries, SSD and battery trends |
+| `gpu_holders` | none; programs holding `/dev/nvidia*` open |
+| `set_fan` | `mode` auto/max/custom/curve, optional `cpu_auto`, `gpu_auto`, `cpu_percent`, `gpu_percent` |
+| `set_fan_curve` | `points`: 3–8 `[temperature, percent]` pairs (see [Safety](#safety)) |
+| `set_fan_speed` | `fan` cpu/gpu, `percent` 0–100 (Custom mode only) |
+| `set_coolboost` | `on` |
+| `set_battery_limit` | `on` (only if the firmware supports it) |
+| `set_keyboard` | `keyboard`: `mode` static/dynamic, `brightness` 1–5, `zones_on` [4 bools], `zone_colors` [4 × "#RRGGBB"], `effect` breathing/wave/zoom/shifting/neon, `speed` 1–9, `direction` 1/2, `effect_color` |
+| `set_lcd_overdrive` / `set_win_key` / `set_backlight_timeout` | `on` |
+| `set_power_plan` | `source` ac/battery, `plan` powersaver/balance/performance |
+| `set_gpu_mode` | `discrete_only` (only if supported; takes effect after reboot) |
+
+Replies are `{"ok": true, ...}` or `{"ok": false, "error": "..."}`.
+
+---
+
 ## Firmware interface reference
 
 WMI class **AcerGamingFunction**, GUID `7A4DDFE7-5B5D-40B4-8595-4408E0CC7F56`, ACPI
-`\_SB.PCI0.WMID.WMBH(instance, method, buffer)`:
+`<WMID>.WMBH(instance, method, buffer)`. The ACPI path is resolved from sysfs: `<WMID>` is
+`\_SB.PCI0.WMID` on the AN515-44 and `\_SB_.PC00.WMID` on the ANV15-51, and the object names
+(`WMBH`, `WMAA`, `WMBE`) come from each GUID's `object_id`, so they can differ between BIOSes.
 
 | ID | Method | Used for | Input (little-endian) |
 |---:|---|---|---|
@@ -316,110 +412,63 @@ WMI class **AcerGamingFunction**, GUID `7A4DDFE7-5B5D-40B4-8595-4408E0CC7F56`, A
 | 7 | GetGamingRgbKb | read zone colour | `zone(1/2/4/8)` → `[status, R, G, B]` |
 | 21 | GetGamingKBBacklight | read lighting state | → `[status, mode, speed, brightness, 0x08, direction, R, G, B]` |
 
-NitroSense switches zones on/off with `SetGamingLEDBehavior` (`0x08 | zone1<<40 | … | zone4<<43`).
-On the AN515-44 BIOS this call answers status 2 (rejected), so NitroSense for Linux turns a zone
-off by writing its colour as black through `SetGamingRgbKb`, which is verified in ACPI.
-
-WMI class **APGeAction**, GUID `61EF69EA-865C-4BC3-A502-A0DEBA0CB531`, ACPI `\_SB.PCI0.WMID.WMAA`:
+WMI class **APGeAction**, GUID `61EF69EA-865C-4BC3-A502-A0DEBA0CB531`, ACPI `<WMID>.WMAA`:
 
 | ID | Method | Used for | Input |
 |---:|---|---|---|
 | 1 | SetFunction | CoolBoost / backlight timeout | CoolBoost `0x07 \| on<<16`; timeout `0x02 \| hotkey<<8 \| 0x80000 \| brightness<<32 \| (on ? 30<<40 : 0)` |
 | 2 | GetFunction | read the same | CoolBoost `0x207`; backlight `0x01 \| hotkey<<8 \| 0x80000` |
 
-Every output starts with a status byte (0 = success). The service treats any non-zero
-status as an error and reports it in the GUI.
+Battery health control, GUID `79772EC5-04B1-4BFD-843C-61E7F77B6CC9` (the interface of the
+`acer-wmi-battery` driver), ACPI `<WMID>.WMBE`:
 
-On the AN515-44 (BIOS V1.04), IDs 5, 6, 7, 16, 17, 20 and 21 are implemented in ACPI
-(`SSDT5`) and were checked there directly. IDs 14, 22 and 23 match the mainline
-`acer-wmi` driver. ID 1 (forwarded to the BIOS via SMI) is confirmed on hardware: the
-Windows-key lock works through it. ID 3 answers Overdrive with `0xFF` in byte 6, which this
-firmware uses for "not supported". If your BIOS differs, override the numbers in
-`/etc/nitrosense/wmi.json`:
+| ID | Method | Input (bytes) | Output |
+|---:|---|---|---|
+| 20 | GetBatteryHealth | `[battery 1, query 1, 0, 0]` | byte 0: supported functions (1 = health mode, 2 = calibration); byte 3: health mode on/off |
+| 21 | SetBatteryHealth | `[battery 1, function mask, status 0/1, 0 …]` (8 bytes) | 4 bytes; the service confirms by reading the state back |
+
+Every output of the first two classes starts with a status byte (0 = success); the service treats
+any other value as an error. For the battery call the result is checked by reading the state back.
+
+Notes by model:
+
+- **AN515-44** (BIOS V1.04): IDs 5, 6, 7, 16, 17, 20 and 21 are implemented in ACPI (`SSDT5`) and were
+  checked there. IDs 14, 22 and 23 match the mainline `acer-wmi` driver. ID 1 is forwarded to the BIOS
+  by SMI and is confirmed on hardware (Windows-key lock). ID 3 answers Overdrive with `0xFF` in
+  byte 6, which this firmware uses for "not supported". Hardware test: 12/12 lighting and fan checks.
+- **ANV15-51**: sensors, fan modes and the battery health mode (get and set) work. The keyboard
+  backlight command is rejected by the firmware, so `HW_Support.ini` marks the lighting type as 0.
+  The GPU temperature (sensor 10) reads 0 while the discrete GPU is suspended.
+- `SetGamingLEDBehavior` (zone on/off mask) is answered with status 2 by the AN515-44 BIOS, so a zone
+  is turned off by writing its colour as black through `SetGamingRgbKb`.
+
+If your BIOS differs, override the numbers in `/etc/nitrosense/wmi.json`:
 
 ```json
 { "methods": { "SetGamingProfile": { "id": 1, "size": 8 } } }
 ```
 
-Hardware test on AN515-44 (12/12 pass): zone colours and order, zone on/off, brightness 1–5,
-Breathing, Wave in both directions, Neon, Shifting, Zoom and the Windows-key lock, plus fan
-modes and sensors. `tools/kbtest.py` (no sudo) walks through every lighting mode and
-the Windows-key lock through the running service and asks you to confirm what you see.
-
-To inspect your own tables: `sudo bash tools/collect-acpi.sh` (read-only; writes the
-dump to `tools/acpi-dump/`, which is git-ignored).
-
----
-
-## Files and configuration
-
-| Path | Purpose |
-|---|---|
-| `/opt/nitrosense/` | program (`bin/nitrosense`, `bin/nitrosensed`, `nitrosense/` package) |
-| `/usr/local/bin/nitrosense` | GUI launcher |
-| `/usr/share/nitrosense/assets/` | artwork extracted from your NitroSense package |
-| `/etc/nitrosense/model/` | `Feature.ini`, `HW_Support.ini` of your model |
-| `/etc/nitrosense/allowed-users` | users allowed to control the hardware (one per line) |
-| `/etc/nitrosense/wmi.json` | optional WMI method-number overrides |
-| `/var/lib/nitrosense/state.json` | saved settings (fan, lighting, power plans, …) |
-| `~/.config/nitrosense/gui.json` | per-user GUI preferences (°C/°F, recent colours) |
-| `/etc/systemd/system/nitrosensed.service` | service unit |
-| `/etc/modules-load.d/nitrosense.conf` | loads `acpi_call` at boot |
-| `/usr/share/applications/io.github.napejoon.NitroSense.desktop` | menu entry (app ID `io.github.napejoon.NitroSense`) |
-| `/usr/share/icons/hicolor/<size>/apps/io.github.napejoon.NitroSense.png` | app icon: NitroSense's keycap tile from your package with the N lit red (fallback: the project's SVG in `scalable/apps`) |
-| `/etc/udev/hwdb.d/61-nitrosense.hwdb` | NitroSense key → `XF86Launch1` |
-| GNOME setting `custom-keybindings/nitrosense/` | shortcut: NitroSense key → open NitroSense |
-
-To let another user control the hardware:
-
-```bash
-echo otheruser | sudo tee -a /etc/nitrosense/allowed-users
-```
-
----
-
-## Service API
-
-The service listens on `/run/nitrosense/nitrosense.sock` and takes one JSON object per
-line. You can script it, for example from Python:
-
-```python
-import sys; sys.path.insert(0, "/opt/nitrosense")
-from nitrosense.client import Client
-c = Client()
-print(c.request("status")["sensors"])          # {'cpu_temp': 53, 'gpu_temp': 43, 'cpu_fan': 2097, 'gpu_fan': 2343}
-c.request("set_fan", mode="max")
-c.request("set_fan", mode="custom", cpu_percent=60, gpu_percent=40, cpu_auto=False, gpu_auto=False)
-c.request("set_fan", mode="auto")
-```
-
-| Command | Arguments |
-|---|---|
-| `status` | none; returns sensors, saved state, firmware state, AC status |
-| `set_fan` | `mode` auto/max/custom, optional `cpu_auto`, `gpu_auto`, `cpu_percent`, `gpu_percent` |
-| `set_fan_speed` | `fan` cpu/gpu, `percent` 0–100 (Custom mode only) |
-| `set_coolboost` | `on` |
-| `set_keyboard` | `keyboard`: `mode` static/dynamic, `brightness` 1–5, `zones_on` [4 bools], `zone_colors` [4 × "#RRGGBB"], `effect` breathing/wave/zoom/shifting/neon, `speed` 1–9, `direction` 1/2, `effect_color` |
-| `set_lcd_overdrive` / `set_win_key` / `set_backlight_timeout` | `on` |
-| `set_power_plan` | `source` ac/battery, `plan` powersaver/balance/performance |
-| `set_gpu_mode` | `discrete_only` (only if supported; takes effect after reboot) |
-
-Replies are `{"ok": true, ...}` or `{"ok": false, "error": "..."}`.
+`tools/kbtest.py` walks through every lighting mode through the running service. To inspect your own
+tables: `sudo bash tools/collect-acpi.sh` (read-only; writes to `tools/acpi-dump/`, which is
+git-ignored).
 
 ---
 
 ## Security model
 
-- Only the service runs as root. The GUI runs as your user.
-- The service accepts connections only from root and the users listed in
-  `/etc/nitrosense/allowed-users`, checked per connection with `SO_PEERCRED`.
-- Requests are validated (types, ranges, `#RRGGBB` colours). The service builds the
+- Only the service runs as root. The GUI and the watcher run as your user.
+- The service accepts connections only from root and the users in `/etc/nitrosense/allowed-users`,
+  checked per connection with `SO_PEERCRED`. Those users can read everything the service exposes,
+  including the names of the programs that hold the GPU open.
+- Requests are validated (types, ranges, `#RRGGBB` colours, fan-curve rules). The service builds the
   firmware input itself; clients never send raw WMI values.
-- Only 12 known WMI methods can be called, each with a fixed input size. Unknown
-  commands are rejected.
+- Only 15 known WMI methods can be called, each with a fixed input size. Unknown commands are
+  rejected.
 - `acpi_call` can call any ACPI method, but only root can use `/proc/acpi/call`.
-- The systemd unit runs with `ProtectSystem=full`, `ProtectHome=true`,
-  `PrivateTmp=true` and `NoNewPrivileges=true`.
+- The history is stored under `/var/lib/nitrosense/history/` as plain files readable by every local
+  user; it contains sensor readings only.
+- The systemd unit runs with `ProtectSystem=full`, `ProtectHome=true`, `PrivateTmp=true` and
+  `NoNewPrivileges=true`.
 
 ---
 
@@ -439,25 +488,31 @@ dkms status | grep acpi-call
 mokutil --sb-state
 ```
 With Secure Boot on, the module must be signed by an enrolled MOK. Run
-`sudo dpkg-reconfigure acpi-call-dkms` and reboot; if the MOK enrolment screen
-appears, choose *Enroll MOK*. After a **kernel update**, DKMS rebuilds the module
-automatically.
+`sudo dpkg-reconfigure acpi-call-dkms` and reboot; if the MOK screen appears, choose *Enroll MOK*.
+After a **kernel update**, DKMS rebuilds the module automatically.
 
-**"permission denied"**: add your user to `/etc/nitrosense/allowed-users`
-(see [Files and configuration](#files-and-configuration)).
+**"permission denied"**: add your user to `/etc/nitrosense/allowed-users`.
 
-**Black corners around the window**: the desktop needs compositing for the
-transparent corners. Normal GNOME (X11 or Wayland) has it.
+**A tab says the service is not updated** (history, SMART, power or "gpu_holders" empty): the
+running service is older than the window. Run the installer again, or copy the files and
+`sudo systemctl restart nitrosensed`.
 
-**High-Performance seems no different from Balance**: on some CPUs (e.g. Ryzen 4000
-with `acpi-cpufreq`), power-profiles-daemon has no *performance* profile. NitroSense
-still switches the governor to `performance`. Check with
+**No desktop notifications**: check that the watcher runs (`pgrep -f nitrosense-watch`) and that a
+notification daemon is running in your session. The window itself notifies only when the watcher is
+not running.
+
+**The discrete GPU never sleeps**: open the **Processos** tab, which lists the programs holding it
+open. Closing them lets it suspend (`cat /sys/bus/pci/devices/0000:01:00.0/power/runtime_status`).
+
+**No power in watts**: RAPL counters are root-only, so the service must run as root and be up to date;
+AMD machines are untested. GPU power appears only while the GPU is awake.
+
+**The battery-limit switch is missing**: the firmware did not report the interface. Run
+`sudo python3 -I tools/probe_battery.py` to see what it answers.
+
+**High-Performance seems no different from Balance**: on some CPUs power-profiles-daemon has no
+*performance* profile. The governor is still switched; check with
 `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor`.
-
-**Keyboard lighting doesn't seem to change**: the laptop keyboard switches its backlight off
-after a while without keystrokes on *it* (typing on an external keyboard doesn't count).
-Press any key on the laptop keyboard and look again. `python3 -I tools/kbtest.py` tests every
-mode step by step.
 
 **The NitroSense key does nothing**
 ```bash
@@ -474,10 +529,7 @@ sudo systemctl restart nitrosensed
 journalctl -u nitrosensed -f        # shows every WMI call with its input/output
 ```
 
-**Read-only check of the hardware path**
-```bash
-sudo python3 -I /path/to/nitrosense-linux/tools/probe.py
-```
+**Read-only check of the hardware path**: `sudo python3 -I tools/probe.py`
 
 ---
 
@@ -487,148 +539,92 @@ sudo python3 -I /path/to/nitrosense-linux/tools/probe.py
 sudo ./uninstall.sh
 ```
 
-This puts the fans back on **Auto**, restores the Balance CPU policy, and removes the
-service, the program, the artwork, the configuration and the saved state.
-`acpi-call-dkms` stays installed; remove it with `sudo apt remove acpi-call-dkms`
-if nothing else uses it.
+This puts the fans back on **Auto**, restores the Balance CPU policy, and removes the service, the
+program, the alert watcher, the configuration, the history and the saved state. `acpi-call-dkms`
+stays installed; remove it with `sudo apt remove acpi-call-dkms` if nothing else uses it.
 
 ---
 
 ## Development
 
 ```bash
-# unit tests: encoders vs. values from the decompiled IL, daemon against simulated firmware
+# unit tests (98): encoders, daemon against a simulated firmware, disks, battery, history,
+# RAPL, throttling, processes and the fan curve
 python3 -m unittest discover -s tests -v
 
-# extract artwork somewhere local
-python3 -m nitrosense.extract "/path/to/Nitro Sense_..._W10x64_A" /tmp/ns-assets
-
-# run the GUI from the source tree against a simulated laptop (no root, no hardware)
+# run the dashboard from the source tree against a simulated laptop (no root, no hardware)
 python3 tests/fake_hw.py /tmp/ns.sock &
-NITROSENSE_SOCKET=/tmp/ns.sock NITROSENSE_ASSETS=/tmp/ns-assets ./bin/nitrosense
+NITROSENSE_SOCKET=/tmp/ns.sock ./bin/nitrosense
 ```
 
-Environment variables:
+`tests/fake_hw.py` simulates the firmware (fan modes change the RPM, temperatures drift), SMART data
+and CPU power. Variables for demos: `NITROSENSE_FAKE_HISTORY=1` fills seven days of history,
+`NITROSENSE_FAKE_WEAR=<percent>` sets the SSD wear, `NITROSENSE_FAKE_THROTTLE=1` pretends the CPU is
+being held back.
+
+The window is a single-instance application. To run a second copy next to an installed one, start
+it in its own session bus with its own config:
+`XDG_CONFIG_HOME=$(mktemp -d) dbus-run-session -- python3 -I bin/nitrosense`.
 
 | Variable | Meaning |
 |---|---|
-| `NITROSENSE_SOCKET` | service socket the GUI connects to |
-| `NITROSENSE_ASSETS` | artwork directory (default `/usr/share/nitrosense/assets`) |
+| `NITROSENSE_SOCKET` | service socket the GUI and the watcher connect to |
 | `NITROSENSE_MODEL_DIR` | model `.ini` directory (default `/etc/nitrosense/model`) |
+| `NITROSENSE_ASSETS` | artwork directory for the original window helpers (default `/usr/share/nitrosense/assets`) |
 | `NITROSENSE_LOG` | service log level (`DEBUG`, `INFO`, …) |
 
-`tests/fake_hw.py` simulates the AN515-44 firmware (fan modes change the RPM,
-temperatures drift), so every screen can be exercised without root.
+---
+
+## Origin and credits
+
+The project started as a port of Acer **NitroSense 3.01.3056** for Windows by
+[napejoon](https://github.com/napejoon/nitrosense-linux), made by reading the Windows application
+itself:
+
+1. The NitroSense installer holds an `.appxbundle` whose x64 `.appx` has `Win32/NitroSense.exe`, a
+   .NET Framework 4.5 **WPF** application; the MSI holds the native service (`PSSvc`) that talks to WMI.
+2. The IL of `NitroSense.exe` gave every bit field the app builds, the sensor indices and the
+   slider ranges; strings in the service binary map each pipe command to a WMI method name.
+3. The laptop's ACPI tables were disassembled with `iasl` to confirm the method numbers, buffer sizes
+   and sensor indices in `WMBH`.
+
+**What this fork changed**: the Windows-style window was replaced by the dashboard described above;
+the Windows package became optional; and the service gained SMART, history, RAPL, throttling,
+battery health and charge limit, the fan curve, process listing and the alert watcher. The firmware
+layer (`encoders.py`, `wmi.py`, `controller.py`) is still upstream's work.
 
 ---
 
-## How this port was made
+## Limitations
 
-1. **Package**: the NitroSense installer contains an `.appxbundle`. Its x64 `.appx`
-   holds `Win32/NitroSense.exe`, a .NET Framework 4.5 **WPF** application, and the MSI
-   holds the native service (`PSSvc`) that talks to WMI.
-2. **Code**: the IL of `NitroSense.exe` was read method by method (classes
-   `CommonFunction`, `WMIFunction`, `Nitro_FanControlPage`, `Popup_Lighting`,
-   `LightingDynamicUI`, `Nitro_MainWindow_Octavia`, …). This gave every bit field the app
-   builds, the sensor indices, the slider ranges, the chart behaviour and which controls
-   are shown for which effect and model year.
-3. **Service**: strings in the service binary map each pipe command to a WMI method name
-   on `AcerGamingFunction` or `APGeAction`.
-4. **UI**: the compiled XAML (BAML) of the main window, fan page, monitoring page,
-   popups and the style dictionary was decoded into element trees with exact sizes,
-   margins, colours and control templates. WPF's binary path geometry was decoded into
-   SVG paths, so the icons are the originals.
-5. **Model selection**: `Startup` reads `Feature.ini` `MachineType`; type 1 (AN515-44)
-   uses the *Octavia* main window and the classic monitoring/power-plan page.
-6. **Firmware**: the laptop's ACPI tables were disassembled with `iasl` to confirm the
-   method numbers, buffer sizes and sensor indices in `\_SB.PCI0.WMID.WMBH`.
-
----
-
-## Limitations and differences from Windows
-
-- **Not ported** (Windows-only software): Waves MaxxAudio / DTS sound modes, the
-  NVIDIA GeForce Experience button, the Planet9 promotion.
-- **Power plans** map to Linux CPU policy (see [Power plan mapping](#power-plan-mapping)),
-  not to Windows power schemes.
+- **Interface language**: Brazilian Portuguese only.
+- **Keyboard lighting**: the service and the API support it (and the ANV15-51 firmware rejects the
+  command), but the dashboard has no lighting panel. The panel from the original window is still in
+  `nitrosense/gui/lighting.py`, unused.
+- **Disks**: NVMe only; SATA/HDD health would need `smartmontools`.
+- **Intel-centric sensors**: CPU watts and throttling detection use Intel interfaces; AMD is untested.
+- **GPU data**: only while the discrete GPU is already awake; per-program GPU use needs `nvidia-smi`.
+- **Platform power** (`psys`) is recorded but not shown: on the ANV15-51 it reads lower than the CPU
+  package, so it is not trustworthy there.
+- **Not ported** (Windows-only software): Waves MaxxAudio / DTS sound modes, the NVIDIA GeForce
+  Experience button, the Planet9 promotion.
+- **Power plans** map to Linux CPU policy (see [Power plan mapping](#power-plan-mapping)), not to
+  Windows power schemes.
 - **Sticky keys** uses the GNOME setting and is hidden on desktops without it.
-- **Fonts**: Segoe UI is a Windows font; the UI uses Open Sans / Noto Sans, which look
-  very similar.
-- **Keyboard preview** in the lighting panel is drawn by this app; it shows the 4 zones
-  and an animated preview of the effect.
-- **UI language**: English. NitroSense ships no Thai translation.
-- **Zone on/off** is done by writing the zone black, because the AN515-44 BIOS rejects
-  NitroSense's zone-mask call. The visible result is the same.
-- **LCD Overdrive** and **backlight off after 30 seconds** are not available on the AN515-44
-  and are hidden there.
-
----
-
-## คู่มือภาษาไทย
-
-### NitroSense for Linux คืออะไร
-โปรแกรมควบคุมโน้ตบุ๊ก Acer Nitro บน Linux ที่ทำหน้าตาและการทำงานให้เหมือน NitroSense บน
-Windows ทำโดยแกะจากตัวโปรแกรม Windows โดยตรง: layout ของหน้าต่าง ตำแหน่ง สี รูป และไอคอนเป็นของเดิม
-และ service ส่งคำสั่งไปยัง firmware ด้วยค่าเดียวกับ Windows ทุกบิต
-
-### ทำอะไรได้บ้าง
-- **พัดลม**: Auto / Max / Custom (ปรับ CPU กับ GPU แยกกัน 0–100%) และ **CoolBoost™** (ใช้ได้เฉพาะโหมด Auto เหมือน Windows)
-- **Monitoring**: อุณหภูมิและโหลดของ CPU/GPU, รอบพัดลม, กราฟย้อนหลัง 12 นาที, ค่า Min/Max, เลือก °C หรือ °F
-- **Power Plan**: Power Saver / Balance / High-Performance ตั้งแยกกันตอนเสียบสายชาร์จและตอนใช้แบตเตอรี่ แล้วสลับให้อัตโนมัติ
-- **ไฟคีย์บอร์ด RGB 4 โซน**: Static (สีแยกโซน เปิดปิดทีละโซน ความสว่าง 1–5) และ Dynamic (Breathing, Wave, Zoom, Shifting, Neon พร้อมความเร็ว ทิศทาง และสี)
-- **ปุ่ม NitroSense บนคีย์บอร์ด**: กดแล้วเปิดโปรแกรมได้เหมือนบน Windows ถ้าเปิดอยู่แล้วจะดึงหน้าต่างขึ้นมาด้านหน้า
-- **ตั้งค่าอื่นๆ**: Sticky keys, ล็อกปุ่ม Windows, LCD Overdrive, ปิดไฟคีย์บอร์ดเมื่อไม่ได้ใช้ 30 วินาที
-- **จำค่าที่ตั้งไว้** แล้วตั้งกลับให้เองตอนเปิดเครื่อง ตอนตื่นจาก Sleep และตอนเสียบหรือถอดสายชาร์จ
-
-### ติดตั้ง
-1. โหลด **NitroSense สำหรับ Windows** ของรุ่นคุณจากเว็บ Acer แล้วแตกไฟล์ (เช่น `Nitro Sense_Acer_3.01.3056_W10x64_A`)
-2. รันคำสั่งนี้:
-   ```bash
-   git clone https://github.com/napejoon/nitrosense-linux.git
-   cd nitrosense-linux
-   sudo ./install.sh "/path/to/Nitro Sense_Acer_3.01.3056_W10x64_A"
-   ```
-3. เปิด **NitroSense** จากเมนูแอป หรือพิมพ์ `nitrosense`
-
-ก่อนติดตั้ง installer จะ**ตรวจฮาร์ดแวร์แบบอ่านอย่างเดียว**ก่อน ถ้าค่าที่อ่านได้ดูผิดปกติจะหยุดทันทีโดยไม่ติดตั้งอะไรเพิ่ม
-ถ้าเปิด Secure Boot อยู่ module `acpi_call` ต้องเซ็นด้วย MOK ถ้ายังไม่เคย enroll Ubuntu จะให้ตั้งรหัส
-แล้วให้กด *Enroll MOK* บนจอสีฟ้าตอนรีบูต
-
-### วิธีใช้
-- **ลากแถบด้านบน**เพื่อย้ายหน้าต่าง ไอคอนมุมขวาบนเรียงจากขวาไปซ้าย: ปิด, ย่อ, ตั้งค่า (เฟือง), ไฟคีย์บอร์ด
-- **พัดลม**: กด Auto/Max/Custom ในโหมด Custom ให้ลากหรือ scroll แถบเลื่อน ค่าจะถูกส่งตอนปล่อยเมาส์ ปุ่ม Auto ใต้แถบจะให้พัดลมตัวนั้นกลับเป็นอัตโนมัติ
-- **Power Plan**: เลือกแท็บ AC หรือ Battery แล้วเลือกแผน
-- **ไฟคีย์บอร์ด**: กดไอคอนคีย์บอร์ด เลือก Static หรือ Dynamic แล้วปรับได้เลย คีย์บอร์ดเปลี่ยนตามทันที
-- ปิดหน้าต่างได้ตามสบาย ค่าที่ตั้งไว้ยังทำงานต่อเพราะ service ดูแลอยู่
-
-### แก้ปัญหาเบื้องต้น
-- ขึ้น *"NitroSense service is not running"* → `sudo systemctl restart nitrosensed` แล้วดู log ด้วย `journalctl -u nitrosensed -b`
-- ขึ้น *"acpi_call kernel module is not loaded"* → `sudo modprobe acpi_call` ถ้าไม่ผ่านให้เช็ก Secure Boot/MOK
-- กด**ปุ่ม NitroSense แล้วไม่มีอะไรเกิดขึ้น** → ดูหัวข้อ [NitroSense key](#nitrosense-key) (installer ตั้งค่าให้อัตโนมัติ: เปลี่ยน scancode `0xf5` เป็น `XF86Launch1` แล้วสร้าง shortcut ของ GNOME ไว้)
-- **ตั้งไฟคีย์บอร์ดแล้วดูเหมือนไม่เปลี่ยน** → ไฟคีย์บอร์ดของโน้ตบุ๊กจะดับเองถ้าไม่ได้กดคีย์บอร์ด*ตัวเครื่อง*สักพัก (พิมพ์จากคีย์บอร์ดภายนอกไม่นับ) ให้กดปุ่มอะไรก็ได้บนคีย์บอร์ดโน้ตบุ๊กแล้วดูใหม่ หรือรัน `python3 -I tools/kbtest.py` เพื่อทดสอบทีละโหมด
-- LCD Overdrive และ "ปิดไฟคีย์บอร์ดหลัง 30 วินาที" ไม่มีบน AN515-44 (จอ/BIOS ไม่รองรับ) โปรแกรมจึงซ่อนตัวเลือกนี้ไว้ เหมือนบน Windows
-- ขึ้น *"permission denied"* → `echo ชื่อผู้ใช้ | sudo tee -a /etc/nitrosense/allowed-users`
-
-### ถอนการติดตั้ง
-```bash
-sudo ./uninstall.sh
-```
-พัดลมจะกลับเป็น Auto และไฟล์ทั้งหมดของโปรแกรมจะถูกลบออก
+- **Notifications** need a desktop notification service; the alerts also show in the window.
 
 ---
 
 ## Disclaimer
 
-Unofficial project, not affiliated with or endorsed by Acer. "Acer", "Nitro",
-"NitroSense" and "CoolBoost" are trademarks of Acer Inc. This repository contains
-no Acer code, firmware or artwork; the installer reads the artwork from the
-NitroSense package you downloaded yourself; that includes the app icon, which the
-installer builds from NitroSense's own keycap tile (`nitrosense/iconmaker.py` lights the N red
-like the backlit NitroSense key). The fallback icon `data/icons/io.github.napejoon.NitroSense.svg`
-is original artwork made for this project. Changing fan and firmware settings is
-at your own risk.
+Unofficial project, not affiliated with or endorsed by Acer. "Acer", "Nitro", "NitroSense" and
+"CoolBoost" are trademarks of Acer Inc. This repository contains no Acer code, firmware or artwork;
+the installer reads artwork from a NitroSense package only if you provide one, and the app icon then
+comes from NitroSense's own keycap tile (`nitrosense/iconmaker.py` lights the N red like the backlit
+key). The fallback icon `data/icons/io.github.napejoon.NitroSense.svg` is original artwork made for
+the upstream project. Changing fan and firmware settings is at your own risk.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The license covers this repository's code only; the
-NitroSense artwork the installer extracts stays Acer's and is not redistributed.
+MIT, see [LICENSE](LICENSE). The license covers this repository's code only; any NitroSense artwork
+the installer extracts stays Acer's and is not redistributed.
