@@ -32,13 +32,15 @@ from . import power
 from . import procs
 from . import throttle
 from .rapl import Rapl
-from .sysmon import CpuLoad, GpuMonitor
+from .sysmon import CpuLoad, GpuMonitor, gpu_throttle
 from .controller import Controller, wait_for_acpi_call
 from .protocol import (ALLOWED_USERS_FILE, MAX_REQUEST, SOCKET_DIR, SOCKET_PATH,
                        HISTORY_DIR, STATE_DIR, STATE_FILE, default_state)
 from .wmi import WmiError
 
 log = logging.getLogger("nitrosense.daemon")
+
+GPU_GATE_C = 78  # below this the dGPU is never asked about slowdowns (see gpu_slowdown_step)
 
 HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
@@ -112,6 +114,9 @@ class Daemon:
         self.curve = fancurve.FanCurve()
         self.fan_lock = threading.RLock()  # serialises fan commands and the curve thread
         self._gpu_probe = GpuMonitor()     # only to know whether the dGPU is awake
+        self._gpu_slow = GpuMonitor()      # NVML slowdown reasons, used by the throttle thread only
+        self.gpu_throttle: dict = {}
+        self._gpu_thermal_for = 0.0
         self._ac = power.ac_online()
         self.gpu_mode_supported = False
         self.gpu_mode = 0
@@ -334,9 +339,29 @@ class Daemon:
             while not self._stop.wait(interval):
                 try:
                     self.throttle.update(self._rapl_thr.sample().get("cpu"))
+                    self.gpu_slowdown_step(interval)
                 except Exception as e:
                     log.warning("throttle sample failed: %s", e)
         threading.Thread(target=loop, name="throttle", daemon=True).start()
+
+    def gpu_slowdown_step(self, dt: float) -> None:
+        """Is the dGPU being slowed down by heat? Uses NVML's clocks-event reasons.
+
+        NVML is touched only when the GPU is already awake AND hot (GPU_GATE_C or more, read
+        from the firmware sensor, which does not involve the GPU): a hot GPU is busy, so these
+        reads can never keep an idle GPU from suspending.
+        """
+        temp = self.sensors()["gpu_temp"]
+        sampled = bool(temp is not None and temp >= GPU_GATE_C and self._gpu_probe.awake())
+        flags = {"thermal": False, "power": False, "hw": False}
+        clocks: dict = {}
+        if sampled:
+            self._gpu_slow.sample()
+            flags = gpu_throttle(self._gpu_slow.reasons)
+            clocks = {"clock": self._gpu_slow.clock, "clock_max": self._gpu_slow.clock_max}
+        self._gpu_thermal_for = self._gpu_thermal_for + dt if flags["thermal"] else 0.0
+        self.gpu_throttle = dict(flags, sampled=sampled, thermal_for_s=round(self._gpu_thermal_for, 1),
+                                 **clocks)
 
     # ---------------------------------------------------------- history
     def start_recorder(self, directory: str = HISTORY_DIR, interval: int = history.INTERVAL) -> None:
@@ -389,7 +414,8 @@ class Daemon:
             with self.lock:
                 st = copy.deepcopy(self.state)
             return {"ok": True, "ready": self.ready, "error": self.error,
-                    "sensors": self.sensors(), "throttle": self.throttle.last, "state": st,
+                    "sensors": self.sensors(), "throttle": self.throttle.last,
+                    "gpu_throttle": self.gpu_throttle, "state": st,
                     "fan_curve": dict(self.curve.info, points=st["fan_curve"]["points"]), "ac": power.ac_online(),
                     "hw": {"lcd_overdrive": self.hw_lcd_overdrive, "coolboost": self.hw_coolboost,
                            "lcd_overdrive_supported": self.overdrive_supported,

@@ -61,7 +61,7 @@ Behind the window:
   boot, after resume and when you plug or unplug the charger, and records the history around
   the clock, even with the window closed.
 - **Alerts with the window closed.** `nitrosense-watch` sends desktop notifications for high
-  temperatures, a stopped fan, SSD or battery trouble, and sustained thermal throttling.
+  temperatures, a stopped fan, SSD or battery trouble, and sustained thermal throttling of the CPU or the GPU.
 - **Never wakes the discrete GPU.** NVML and `nvidia-smi` are used only while the GPU is
   already awake, so monitoring does not stop it from saving power.
 - **The NitroSense key** on the keyboard opens the dashboard.
@@ -238,7 +238,7 @@ quiet, so you never get a duplicate.
 | GPU temperature | 85 °C | 92 °C |
 | Fan | | 0 RPM while the temperature is 75 °C or more |
 | CPU thermal throttling | 10 s or more in a row | |
-| GPU thermal slowdown (window only) | reported by NVML | |
+| GPU thermal slowdown | 10 s or more in a row (reported by NVML) | |
 | SSD wear | 80 % or more | 100 % |
 | SSD spare capacity | below 50 % | at or below the drive's threshold |
 | SSD critical-warning flags | volatile-memory backup failure | spare, reliability or read-only flags |
@@ -278,7 +278,9 @@ reads the state back after every change and reports an error if the firmware did
 `tools/probe_battery.py` is a read-only check for it.
 
 **Discrete GPU**: nothing in the app wakes it. NVML and `nvidia-smi` are used only while the PCI
-runtime status is *active*.
+runtime status is *active*. The thermal-slowdown alert that works with the window closed asks NVML
+only when the GPU is already awake **and** at 78 °C or more (read from the firmware sensor, which
+does not involve the GPU): a hot GPU is busy, so those reads cannot keep it from suspending.
 
 ---
 
@@ -379,7 +381,7 @@ c.request("set_fan", mode="auto")
 
 | Command | Arguments and reply |
 |---|---|
-| `status` | none; sensors, `throttle`, `fan_curve` (live state), saved `state`, firmware state (`hw`), AC status |
+| `status` | none; sensors, `throttle`, `gpu_throttle`, `fan_curve` (live state), saved `state`, firmware state (`hw`), AC status |
 | `disks` | none; SMART data per NVMe controller |
 | `history` | `range` 1h/6h/24h/7d/30d; bucketed series, summaries, SSD and battery trends |
 | `gpu_holders` | none; programs holding `/dev/nvidia*` open |
@@ -553,7 +555,7 @@ stays installed; remove it with `sudo apt remove acpi-call-dkms` if nothing else
 ## Development
 
 ```bash
-# unit tests (98): encoders, daemon against a simulated firmware, disks, battery, history,
+# unit tests (103): encoders, daemon against a simulated firmware, disks, battery, history,
 # RAPL, throttling, processes and the fan curve
 python3 -m unittest discover -s tests -v
 

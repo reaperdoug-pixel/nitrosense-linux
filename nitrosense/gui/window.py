@@ -141,6 +141,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._bat_assess: list[tuple[dict, dict]] = []
         self._throttle: dict = {}
         self._gpu_perf: dict = {}
+        self._gpu_slow: dict = {}  # the service's view of GPU slowdown (also runs with no window)
         self.sampler = procs.ProcessSampler()
         self._procs_busy = False
         self._procs_at = 0.0
@@ -635,7 +636,8 @@ class MainWindow(Gtk.ApplicationWindow):
     def _update_alerts(self, cpu_temp, gpu_temp) -> None:
         found = alerts.evaluate(cpu_temp, gpu_temp, self.rpm.get("cpu"), self.rpm.get("gpu"),
                                 self._disk_assess, self._bat_assess, self._throttle,
-                                bool(self._gpu_perf.get("thermal")))
+                                bool(self._gpu_perf.get("thermal"))
+                                or self._gpu_slow.get("thermal_for_s", 0) >= alerts.THERMAL_ALERT_S)
         keys = {a[1] for a in found}
         for key in [k for k in self._notified if k not in keys]:
             del self._notified[key]
@@ -1582,6 +1584,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._power = {"cpu": sensors.get("cpu_power"),
                        "gpu": None if suspended else self.gpu.power}
         self._throttle = (status or {}).get("throttle") or {}
+        self._gpu_slow = (status or {}).get("gpu_throttle") or {}
         self._gpu_perf = {} if suspended else {
             "clock": self.gpu.clock, "clock_max": self.gpu.clock_max,
             **gpu_throttle(self.gpu.reasons)}

@@ -113,7 +113,8 @@ def check(client: Client, smart_cache: dict, read_smart: bool):
     return alerts.evaluate(sensors.get("cpu_temp"), sensors.get("gpu_temp"),
                            sensors.get("cpu_fan"), sensors.get("gpu_fan"), assessed,
                            [(b, battery.assess(b)) for b in battery.read()],
-                           status.get("throttle"))
+                           status.get("throttle"),
+                           (status.get("gpu_throttle") or {}).get("thermal_for_s", 0) >= alerts.THERMAL_ALERT_S)
 
 
 def main() -> int:

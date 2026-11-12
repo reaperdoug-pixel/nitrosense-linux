@@ -59,7 +59,7 @@ Por trás da janela:
   ligar, ao voltar da suspensão e ao ligar ou desligar o carregador, e grava o histórico o tempo
   todo, **mesmo com a janela fechada**.
 - **Alertas com a janela fechada.** O `nitrosense-watch` envia notificações do desktop para
-  temperatura alta, ventoinha parada, problemas no SSD ou na bateria e limitação térmica prolongada.
+  temperatura alta, ventoinha parada, problemas no SSD ou na bateria e limitação térmica prolongada da CPU ou da GPU.
 - **Nunca acorda a GPU dedicada.** O NVML e o `nvidia-smi` só são usados enquanto a GPU já está
   acordada, então o monitoramento não impede que ela economize energia.
 - **A tecla NitroSense** do teclado abre o painel.
@@ -235,7 +235,7 @@ quieta, para você nunca receber duplicado.
 | Temperatura da GPU | 85 °C | 92 °C |
 | Ventoinha | | 0 RPM com a temperatura em 75 °C ou mais |
 | CPU limitada por calor | 10 s seguidos ou mais | |
-| GPU reduzindo por calor (só na janela) | informado pelo NVML | |
+| GPU reduzindo por calor | 10 s seguidos ou mais (informado pelo NVML) | |
 | Desgaste do SSD | 80% ou mais | 100% |
 | Reserva de células do SSD | abaixo de 50% | no limite do disco ou abaixo |
 | Sinalizadores críticos do SSD | falha no backup de memória volátil | reserva, confiabilidade ou somente leitura |
@@ -277,7 +277,9 @@ o estado de volta depois de cada mudança e avisa se o firmware não a aceitou.
 O `tools/probe_battery.py` é uma verificação somente de leitura dessa interface.
 
 **GPU dedicada**: nada no app a acorda. O NVML e o `nvidia-smi` só são usados enquanto o estado de
-runtime PCI está *active*.
+runtime PCI está *active*. O alerta de redução por calor com a janela fechada só consulta o NVML
+quando a GPU já está acordada **e** a 78 °C ou mais (temperatura do sensor do firmware, que não
+envolve a GPU): uma GPU quente está ocupada, então essas leituras não a impedem de suspender.
 
 ---
 
@@ -379,7 +381,7 @@ c.request("set_fan", mode="auto")
 
 | Comando | Argumentos e resposta |
 |---|---|
-| `status` | nenhum; sensores, `throttle`, `fan_curve` (estado ao vivo), `state` salvo, estado do firmware (`hw`), estado do carregador |
+| `status` | nenhum; sensores, `throttle`, `gpu_throttle`, `fan_curve` (estado ao vivo), `state` salvo, estado do firmware (`hw`), estado do carregador |
 | `disks` | nenhum; dados SMART por controladora NVMe |
 | `history` | `range` 1h/6h/24h/7d/30d; séries agrupadas, resumos, tendências do SSD e da bateria |
 | `gpu_holders` | nenhum; programas com `/dev/nvidia*` aberto |
@@ -560,7 +562,7 @@ usar.
 ## Desenvolvimento
 
 ```bash
-# testes unitários (98): encoders, serviço contra um firmware simulado, discos, bateria,
+# testes unitários (103): encoders, serviço contra um firmware simulado, discos, bateria,
 # histórico, RAPL, limitação, processos e a curva de ventoinha
 python3 -m unittest discover -s tests -v
 

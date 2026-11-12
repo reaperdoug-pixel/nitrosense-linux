@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fake_hw import make_daemon  # noqa: E402
 
-from nitrosense import alerts, disks, history, sysmon, throttle  # noqa: E402
+from nitrosense import alerts, disks, history, sysmon, throttle, watcher  # noqa: E402
 
 
 def put(path, value):
@@ -153,6 +153,90 @@ class GpuAndIntegrationTests(unittest.TestCase):
         q = d.recorder.query("1h")
         self.assertEqual(q["summary"]["thr"]["max"], 100.0)
         self.assertEqual(q["summary"]["fq"]["max"], 3000.0)
+
+
+class FakeGpu:
+    """Stands in for GpuMonitor: counts how often the GPU is actually asked."""
+
+    def __init__(self, awake=True, reasons=0):
+        self._awake, self.reasons = awake, reasons
+        self.clock, self.clock_max = 900, 1695
+        self.samples = 0
+
+    def awake(self):
+        return self._awake
+
+    def sample(self):
+        self.samples += 1
+
+
+class GpuSlowdownTests(unittest.TestCase):
+    def setUp(self):
+        self.d = make_daemon()
+        self.gpu = FakeGpu()
+        self.d._gpu_probe = self.d._gpu_slow = self.gpu
+
+    def temp(self, gpu):
+        self.d._sensor_cache = (1e12, {"cpu_temp": 50, "gpu_temp": gpu, "cpu_fan": 2000,
+                                       "gpu_fan": 2000, "cpu_power": None, "igpu_power": None,
+                                       "sys_power": None})
+
+    def test_a_cool_gpu_is_never_asked(self):
+        self.temp(60)
+        self.gpu.reasons = 0x40
+        for _ in range(5):
+            self.d.gpu_slowdown_step(2)
+        self.assertEqual(self.gpu.samples, 0)  # NVML untouched below the gate
+        self.assertEqual(self.d.gpu_throttle["sampled"], False)
+        self.assertFalse(self.d.gpu_throttle["thermal"])
+
+    def test_a_sleeping_gpu_is_never_asked_even_if_the_sensor_looks_hot(self):
+        self.temp(90)
+        self.gpu._awake = False
+        self.d.gpu_slowdown_step(2)
+        self.assertEqual(self.gpu.samples, 0)
+
+    def test_thermal_slowdown_accumulates_and_resets(self):
+        self.temp(86)
+        self.gpu.reasons = 0x40  # hardware thermal slowdown
+        for _ in range(5):
+            self.d.gpu_slowdown_step(2)
+        info = self.d.handle({"cmd": "status"})["gpu_throttle"]
+        self.assertEqual((info["thermal"], info["thermal_for_s"], info["sampled"]), (True, 10.0, True))
+        self.assertEqual((info["clock"], info["clock_max"]), (900, 1695))
+        self.gpu.reasons = 0
+        self.d.gpu_slowdown_step(2)
+        self.assertEqual(self.d.gpu_throttle["thermal_for_s"], 0.0)
+
+    def test_power_cap_alone_is_not_a_heat_problem(self):
+        self.temp(86)
+        self.gpu.reasons = 0x4  # software power cap: normal under load
+        for _ in range(6):
+            self.d.gpu_slowdown_step(2)
+        self.assertEqual((self.d.gpu_throttle["power"], self.d.gpu_throttle["thermal"]), (True, False))
+        self.assertEqual(self.d.gpu_throttle["thermal_for_s"], 0.0)
+
+    def test_watcher_raises_the_alert_after_ten_seconds(self):
+        self.temp(86)
+        self.gpu.reasons = 0x20  # software thermal slowdown
+
+        class Client:
+            def __init__(self, daemon):
+                self.d = daemon
+
+            def request(self, cmd, **kw):
+                if cmd == "status":
+                    return self.d.handle({"cmd": "status"})
+                return {"smart": {}}
+
+        client = Client(self.d)
+        for _ in range(4):
+            self.d.gpu_slowdown_step(2)
+        found = watcher.check(client, {}, False)
+        self.assertNotIn("throttle:GPU", [a[1] for a in found])  # 8 s: not yet
+        self.d.gpu_slowdown_step(2)
+        found = watcher.check(client, {}, False)
+        self.assertIn("throttle:GPU", [a[1] for a in found])    # 10 s
 
 
 if __name__ == "__main__":
