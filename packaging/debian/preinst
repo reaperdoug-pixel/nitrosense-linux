@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+if [ "$1" = install ] || [ "$1" = upgrade ]; then
+    VENDOR="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)"
+    if [ "$VENDOR" != "Acer" ]; then
+        echo "nitrosense: this is not an Acer machine; refusing to install." >&2
+        exit 1
+    fi
+fi
+exit 0

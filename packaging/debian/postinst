@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    if ! modprobe acpi_call 2>/dev/null; then
+        echo "nitrosense: acpi_call could not be loaded. With Secure Boot on, the DKMS" >&2
+        echo "module must be signed with an enrolled MOK key (see the README)." >&2
+    fi
+    # allow the user who ran sudo/apt to use the panel (others: add to /etc/nitrosense/allowed-users)
+    U="${SUDO_USER:-}"
+    if [ -n "$U" ] && [ "$U" != root ]; then
+        touch /etc/nitrosense/allowed-users
+        grep -qx "$U" /etc/nitrosense/allowed-users || echo "$U" >> /etc/nitrosense/allowed-users
+    fi
+    systemd-hwdb update 2>/dev/null || true
+    udevadm trigger --sysname-match="event*" 2>/dev/null || true
+    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+    update-desktop-database -q /usr/share/applications 2>/dev/null || true
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload || true
+        systemctl enable nitrosensed.service || true
+        systemctl restart nitrosensed.service || true
+    fi
+fi
+exit 0

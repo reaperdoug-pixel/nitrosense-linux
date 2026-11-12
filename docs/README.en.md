@@ -158,6 +158,23 @@ with your next login; to start it now run `setsid /opt/nitrosense/bin/nitrosense
 (`pkill -f nitrosense-watch`, then start it again), since the installer does not touch a running
 one.
 
+### Installing from a `.deb` package
+
+An alternative to `install.sh`: build and install a `.deb` package.
+
+```bash
+packaging/build-deb.sh
+sudo apt install ./dist/nitrosense_*_all.deb
+```
+
+The package only installs on Acer machines, pulls in the dependencies (including `acpi-call-dkms`)
+and enables the service. Differences from `install.sh`: it does not extract the artwork from the
+Windows package (the project's SVG icon is used), does not run the hardware probe and does not
+register the NitroSense key shortcut; for that, logged in to the desktop, run
+`cd /opt/nitrosense && python3 -m nitrosense.shortcut install`. Do not mix the two methods: run
+`sudo ./uninstall.sh` before switching from one to the other. `sudo apt remove nitrosense` puts the
+fans back on Auto; `sudo apt purge nitrosense` also deletes the configuration and the history.
+
 ---
 
 ## Using the dashboard
@@ -612,6 +629,8 @@ sudo ./uninstall.sh
 This puts the fans back on **Auto**, restores the Balance (*Equilibrado*) CPU policy, and removes the service, the
 program, the alert watcher, the configuration, the history and the saved state. `acpi-call-dkms`
 stays installed; remove it with `sudo apt remove acpi-call-dkms` if nothing else uses it.
+
+If you installed from the `.deb`, use `sudo apt purge nitrosense`.
 
 ---
 

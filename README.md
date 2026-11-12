@@ -153,6 +153,23 @@ login; para iniciá-lo agora, rode `setsid /opt/nitrosense/bin/nitrosense-watch 
 `/var/lib/nitrosense` são mantidos. Depois de atualizar, reinicie o vigia (`pkill -f nitrosense-watch`
 e inicie-o outra vez), porque o instalador não mexe num que já esteja rodando.
 
+### Instalar pelo pacote `.deb`
+
+Alternativa ao `install.sh`: gere e instale um pacote `.deb`.
+
+```bash
+packaging/build-deb.sh
+sudo apt install ./dist/nitrosense_*_all.deb
+```
+
+O pacote só instala em máquinas Acer, puxa as dependências (inclusive o `acpi-call-dkms`) e ativa o
+serviço. Diferenças em relação ao `install.sh`: não extrai a arte do pacote do Windows (usa o ícone
+SVG do projeto), não roda o teste de hardware e não registra o atalho da tecla NitroSense; para isso,
+logado no desktop, rode `cd /opt/nitrosense && python3 -m nitrosense.shortcut install`. Não misture
+os dois métodos: rode `sudo ./uninstall.sh` antes de trocar de um para o outro. Remover com
+`sudo apt remove nitrosense` devolve as ventoinhas ao Automático; `sudo apt purge nitrosense` apaga também
+a configuração e o histórico.
+
 ---
 
 ## Usando o painel
@@ -618,6 +635,8 @@ Isso devolve as ventoinhas ao **Automático**, restaura a política de CPU do pl
 serviço, o programa, o vigia de alertas, a configuração, o histórico e o estado salvo. O
 `acpi-call-dkms` continua instalado; remova-o com `sudo apt remove acpi-call-dkms` se nada mais o
 usar.
+
+Se instalou pelo `.deb`, use `sudo apt purge nitrosense`.
 
 ---
 

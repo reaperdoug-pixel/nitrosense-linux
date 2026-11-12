@@ -4,3 +4,5 @@ __pycache__/
 tools/acpi-dump/
 # extracted NitroSense artwork (Acer copyright) - produced at install time only
 assets/
+# built packages
+dist/

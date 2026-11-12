@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+    if [ -S /run/nitrosense/nitrosense.sock ]; then
+        python3 -I -c '
+import sys; sys.path.insert(0, "/opt/nitrosense")
+from nitrosense.client import Client
+try:
+    Client().request("set_fan", mode="auto")
+except Exception as e:
+    print("could not reset fans:", e)
+' || true
+    fi
+    if [ -d /run/systemd/system ]; then
+        systemctl disable --now nitrosensed.service 2>/dev/null || true
+    fi
+    python3 -I -c 'import sys; sys.path.insert(0, "/opt/nitrosense"); from nitrosense.power import restore_defaults; restore_defaults()' 2>/dev/null || true
+    pkill -f /opt/nitrosense/bin/nitrosense-watch 2>/dev/null || true
+fi
+exit 0

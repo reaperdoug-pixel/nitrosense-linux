@@ -1,0 +1,18 @@
+Package: nitrosense
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: all
+Installed-Size: @SIZE@
+Maintainer: NitroSense for Linux <noreply@localhost>
+Depends: python3, python3-gi, python3-gi-cairo, python3-cairo, gir1.2-gtk-4.0, acpi-call-dkms
+Recommends: gir1.2-gtk-3.0, gir1.2-xapp-1.0, smartmontools
+Homepage: https://github.com/napejoon/nitrosense-linux
+Description: Fan, power and health control center for Acer Nitro laptops
+ Dashboard and root service for Acer Nitro notebooks: automatic fan curves,
+ power plans, battery limit and calibration, SSD/SATA/HDD health, history,
+ throttling detection and desktop alerts. Talks to the Acer firmware through
+ acpi_call. Only installs on Acer machines.
+ .
+ With Secure Boot on, the acpi_call DKMS module must be signed with an
+ enrolled MOK key (see the project README).
