@@ -69,6 +69,19 @@ def _box(orientation=Gtk.Orientation.VERTICAL, spacing: int = 8, *classes: str) 
     return b
 
 
+def _page_head(title: str, hint: str = "") -> tuple[Gtk.Box, Gtk.Label]:
+    """Section header shared by every tab: big title on the left, a short hint on the right."""
+    head = _box(Gtk.Orientation.HORIZONTAL, 8)
+    head.set_margin_top(6)
+    head.set_margin_bottom(2)
+    lbl = _lbl(title, "ns-section")
+    lbl.set_hexpand(True)
+    head.append(lbl)
+    hint_lbl = _lbl(hint, "ns-hint", xalign=1.0)
+    head.append(hint_lbl)
+    return head, hint_lbl
+
+
 def _card(spacing: int = 10) -> Gtk.Box:
     return _box(Gtk.Orientation.VERTICAL, spacing, "ns-card")
 
@@ -486,6 +499,8 @@ class MainWindow(Gtk.ApplicationWindow):
     # ============================================================== scenario
     def _build_scenario(self) -> Gtk.Widget:
         page = _box(Gtk.Orientation.VERTICAL, 14)
+        head, self.scenario_hint = _page_head("Cenário")
+        page.append(head)
 
         power = _card(12)
         head = _box(Gtk.Orientation.HORIZONTAL, 8)
@@ -672,6 +687,7 @@ class MainWindow(Gtk.ApplicationWindow):
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         page = _box(Gtk.Orientation.VERTICAL, 14)
         scroller.set_child(page)
+        page.append(_page_head("Discos", "Saúde pelo SMART")[0])
         self._disk_basic = disks.basic()
         if not self._disk_basic:
             card = _card()
@@ -872,6 +888,7 @@ class MainWindow(Gtk.ApplicationWindow):
     # ============================================================== monitor
     def _build_monitor(self) -> Gtk.Widget:
         page = _box(Gtk.Orientation.VERTICAL, 14)
+        page.append(_page_head("Monitoramento", "Últimos 12 minutos")[0])
         self.hist = {}
         self.hist_range = {}
         self.hist_now = {}
@@ -903,6 +920,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _build_procs(self) -> Gtk.Widget:
         page = _box(Gtk.Orientation.VERTICAL, 14)
+        page.append(_page_head("Processos", "O que mais pesa agora")[0])
         cols = _box(Gtk.Orientation.HORIZONTAL, 14)
         cols.set_homogeneous(True)
         self.proc_ui = {}
@@ -1075,6 +1093,7 @@ class MainWindow(Gtk.ApplicationWindow):
         page = _box(Gtk.Orientation.VERTICAL, 14)
         scroller.set_child(page)
         ui = self.bat_ui = {}
+        page.append(_page_head("Bateria", "Saúde, carga e calibração")[0])
 
         card = _card(12)
         head = _box(Gtk.Orientation.HORIZONTAL, 10)
@@ -1253,7 +1272,8 @@ class MainWindow(Gtk.ApplicationWindow):
         page = _box(Gtk.Orientation.VERTICAL, 14)
         scroller.set_child(page)
         head = _box(Gtk.Orientation.HORIZONTAL, 8)
-        title = _lbl("Histórico", "ns-mid")
+        head.set_margin_top(6)
+        title = _lbl("Histórico", "ns-section")
         title.set_hexpand(True)
         head.append(title)
         first = None
@@ -1986,9 +2006,10 @@ class MainWindow(Gtk.ApplicationWindow):
             self.header_battery.set_label(("Na tomada" if self.ac_online else "Na bateria") + cap)
         plan = self.state["power"]["ac" if self.ac_online else "battery"]
         cb = self.coolboost.get_active() and self.state["fan"]["mode"] == "auto"
-        self.home_scenario.set_label(
-            f"Modo: {PLAN_NAMES.get(plan, '--')} · Ventoinha: {FAN_NAMES.get(self.state['fan']['mode'], '--')}"
-            + (" · CoolBoost" if cb else ""))
+        summary = (f"Modo: {PLAN_NAMES.get(plan, '--')} · Ventoinha: "
+                   f"{FAN_NAMES.get(self.state['fan']['mode'], '--')}" + (" · CoolBoost" if cb else ""))
+        self.home_scenario.set_label(summary)
+        self.scenario_hint.set_label(summary)
         self.model_labels["gpu"].set_label(self.gpu.name)
 
     def _show_status(self, text: str, error: bool = True) -> None:

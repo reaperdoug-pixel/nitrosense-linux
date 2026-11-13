@@ -62,8 +62,10 @@ window.nitrosense {{ background: {BG}; color: {TEXT}; }}
 .ns-win button:hover {{ background: {INNER}; color: #ffffff; }}
 .ns-card {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 12px; padding: 16px; }}
 .ns-h {{ font-size: 13px; color: {DIM}; }}
-.ns-big {{ font-size: 26px; font-weight: 700; color: #ffffff; }}
-.ns-mid {{ font-size: 18px; font-weight: 700; color: #ffffff; }}
+.ns-big {{ font-family: "Rajdhani", "Inter", sans-serif; font-size: 26px; font-weight: 700;
+          color: #ffffff; }}
+.ns-mid {{ font-family: "Rajdhani", "Inter", sans-serif; font-size: 18px; font-weight: 700;
+          color: #ffffff; }}
 .ns-dim {{ color: {DIM}; font-size: 12px; }}
 .ns-accent {{ color: {ACCENT_LIGHT}; }}
 .ns-tile {{ background: {INNER}; border-radius: 10px; padding: 10px 12px; }}
