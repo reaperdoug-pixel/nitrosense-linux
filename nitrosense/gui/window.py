@@ -20,8 +20,9 @@ from .. import model as model_cfg  # noqa: E402
 from ..client import Client, DaemonError  # noqa: E402
 from ..protocol import default_state  # noqa: E402
 from ..sysmon import CpuLoad, GpuMonitor, gpu_throttle  # noqa: E402
-from .widgets import (ACCENT, ACCENT_LIGHT, CSS, FanCurveEditor, Gauge, History,  # noqa: E402
-                      TimeChart)
+from .theme import rgba, rounded_rect  # noqa: E402
+from .widgets import (ACCENT, ACCENT_LIGHT, BG, CSS, HOT_FRAC, FanCurveEditor,  # noqa: E402
+                      Gauge, History, TimeChart)
 
 PREFS = os.path.join(GLib.get_user_config_dir(), "nitrosense", "gui.json")
 
@@ -84,6 +85,20 @@ def _conv(c, unit: str) -> str:
     return str(round(c * 9 / 5 + 32)) if unit == "F" else str(round(c))
 
 
+def _cpu_model() -> str:
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    name = line.partition(":")[2].strip()
+                    for junk in ("(R)", "(TM)", " CPU", "  "):
+                        name = name.replace(junk, "")
+                    return name.split(" @")[0].strip()
+    except OSError:
+        pass
+    return ""
+
+
 def _ram_used_gb() -> float | None:
     try:
         info = {}
@@ -94,6 +109,19 @@ def _ram_used_gb() -> float | None:
         return (info["MemTotal"] - info["MemAvailable"]) / 1048576
     except (OSError, KeyError, ValueError, IndexError):
         return None
+
+
+def _draw_logo(_area, cr, w, h) -> None:
+    """Accent tile with a lightning bolt (the NitroSense mark)."""
+    rounded_rect(cr, 0, 0, w, h, 7)
+    cr.set_source_rgba(*rgba(ACCENT))
+    cr.fill()
+    cr.set_source_rgba(*rgba(BG))
+    sx, sy = w / 24, h / 24
+    for i, (x, y) in enumerate(((13.5, 4), (7, 13.5), (11.5, 13.5), (10.5, 20), (17, 10.5), (12.5, 10.5))):
+        (cr.move_to if i == 0 else cr.line_to)(x * sx, y * sy)
+    cr.close_path()
+    cr.fill()
 
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -197,7 +225,17 @@ class MainWindow(Gtk.ApplicationWindow):
         bar.set_margin_top(14)
         bar.set_margin_bottom(12)
         handle.set_child(bar)
-        bar.set_start_widget(_lbl("NITROSENSE", "ns-title"))
+        brand = _box(Gtk.Orientation.HORIZONTAL, 0)
+        logo = Gtk.DrawingArea()
+        logo.set_content_width(28)
+        logo.set_content_height(28)
+        logo.set_valign(Gtk.Align.CENTER)
+        logo.set_margin_end(9)
+        logo.set_draw_func(_draw_logo)
+        brand.append(logo)
+        brand.append(_lbl("Nitro", "ns-title"))
+        brand.append(_lbl("Sense", "ns-title", "ns-title-sense"))
+        bar.set_start_widget(brand)
 
         nav = _box(Gtk.Orientation.HORIZONTAL, 4, "ns-nav")
         first = None
@@ -217,6 +255,9 @@ class MainWindow(Gtk.ApplicationWindow):
         bar.set_center_widget(nav)
 
         win = _box(Gtk.Orientation.HORIZONTAL, 2, "ns-win")
+        self.header_battery = _lbl("", "ns-battery")
+        self.header_battery.set_valign(Gtk.Align.CENTER)
+        win.append(self.header_battery)
         self.settings_button = Gtk.MenuButton(icon_name="emblem-system-symbolic")
         self.settings_button.set_tooltip_text("Configurações")
         win.append(self.settings_button)
@@ -247,115 +288,200 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ================================================================== home
     def _build_home(self) -> Gtk.Widget:
-        page = _box(Gtk.Orientation.HORIZONTAL, 14)
-        page.set_homogeneous(False)
+        page = _box(Gtk.Orientation.HORIZONTAL, 0)
 
-        gpu = _card(8)
-        gpu.set_size_request(290, -1)
-        gpu.append(_lbl("GPU", "ns-h"))
-        self.g_gpu_load = Gauge(200)
-        self.g_gpu_load.set_vexpand(True)
-        self.g_gpu_load.set_valign(Gtk.Align.CENTER)
-        gpu.append(self.g_gpu_load)
-        row = _box(Gtk.Orientation.HORIZONTAL, 0)
-        row.set_homogeneous(True)
-        for attr, title in (("home_gpu_load", "Uso da GPU"), ("home_cpu_load", "Uso da CPU")):
-            col = _box(Gtk.Orientation.VERTICAL, 2)
-            lab = _lbl("--%", "ns-mid", xalign=0.5)
-            setattr(self, attr, lab)
-            col.append(lab)
-            col.append(_lbl(title, "ns-dim", xalign=0.5))
-            row.append(col)
-        gpu.append(row)
-        page.append(gpu)
+        main = _box(Gtk.Orientation.VERTICAL, 0)
+        main.set_hexpand(True)
+        main.set_margin_top(6)
+        main.set_margin_end(24)
+        head = _box(Gtk.Orientation.HORIZONTAL, 8)
+        title = _lbl("Monitor do sistema", "ns-section")
+        title.set_hexpand(True)
+        head.append(title)
+        self.home_scenario = _lbl("", "ns-hint", xalign=1.0)
+        head.append(self.home_scenario)
+        main.append(head)
 
-        mid = _card(14)
-        mid.set_hexpand(True)
-        mid.append(_lbl("Temperatura e ventoinhas", "ns-h"))
-        gauges = _box(Gtk.Orientation.HORIZONTAL, 0)
+        gauges = _box(Gtk.Orientation.HORIZONTAL, 24)
         gauges.set_homogeneous(True)
         gauges.set_vexpand(True)
+        gauges.set_valign(Gtk.Align.CENTER)
         self.g_temp = {}
         self.rpm_labels = {}
         self.pw_labels = {}
         self.fan_cols = {}
-        for name, title, enabled in (("cpu", "CPU", self.model.fan_cpu),
-                                     ("gpu", "GPU", self.model.fan_gpu)):
-            col = _box(Gtk.Orientation.VERTICAL, 8)
-            col.set_valign(Gtk.Align.CENTER)
-            g = Gauge(170, ACCENT if name == "cpu" else ACCENT_LIGHT)
+        self.model_labels = {}
+        for name, title_text, enabled in (("cpu", "CPU", self.model.fan_cpu),
+                                          ("gpu", "GPU", self.model.fan_gpu)):
+            col = _box(Gtk.Orientation.VERTICAL, 2)
+            g = Gauge(250, ACCENT if name == "cpu" else ACCENT_LIGHT, title_text, HOT_FRAC)
             self.g_temp[name] = g
             col.append(g)
-            col.append(_lbl(f"Temperatura da {title}", "ns-dim", xalign=0.5))
-            rpm = _lbl("-- RPM", "ns-mid", xalign=0.5)
+            model = _lbl(_cpu_model() if name == "cpu" else "", "ns-dim", xalign=0.5)
+            model.set_ellipsize(3)  # end
+            self.model_labels[name] = model
+            col.append(model)
+            rpm = _lbl("-- RPM", "ns-mid", "ns-accent", xalign=0.5)
+            rpm.set_margin_top(4)
             self.rpm_labels[name] = rpm
             col.append(rpm)
-            col.append(_lbl(f"Ventoinha da {title}", "ns-dim", xalign=0.5))
-            watts = _lbl("-- W", "ns-mid", xalign=0.5)
-            watts.set_margin_top(6)
+            watts = _lbl("--", "ns-dim", xalign=0.5)
             self.pw_labels[name] = watts
             col.append(watts)
-            col.append(_lbl(f"Consumo da {title}", "ns-dim", xalign=0.5))
             col.set_visible(enabled)
             self.fan_cols[name] = col
             gauges.append(col)
-        mid.append(gauges)
+        main.append(gauges)
+
         perf = _box(Gtk.Orientation.VERTICAL, 4)
-        perf.set_margin_bottom(6)
+        perf.set_margin_bottom(14)
         self.perf_chip = _lbl("--", "ns-chip")
         self.perf_chip.set_halign(Gtk.Align.CENTER)
         perf.append(self.perf_chip)
         self.perf_detail = _lbl("", "ns-dim", xalign=0.5)
         self.perf_detail.set_wrap(True)
         perf.append(self.perf_detail)
-        mid.append(perf)
-        page.append(mid)
+        main.append(perf)
 
-        side = _card(6)
-        side.set_size_request(330, -1)
-        side.append(_lbl("Perfil de cenário", "ns-h"))
-        rows = _box(Gtk.Orientation.VERTICAL, 0)
-        self.prof_vals = {}
-        for key, title in (("mode", "Modo"), ("fan", "Ventoinha"), ("coolboost", "CoolBoost")):
-            r = _box(Gtk.Orientation.HORIZONTAL, 6, "ns-row")
-            lab = _lbl(title)
+        stats = _box(Gtk.Orientation.HORIZONTAL, 0)
+        stats.set_homogeneous(True)
+        stats.set_margin_bottom(8)
+        self.tiles = {}
+        for key, title_text, goto in (("ram", "Memória em uso", None),
+                                      ("disk_health", "Saúde do SSD", "disks"),
+                                      ("battery", "Bateria", "battery"),
+                                      ("bat_health", "Saúde da bateria", "battery")):
+            col = _box(Gtk.Orientation.VERTICAL, 2)
+            col.append(_lbl(title_text, "ns-dim"))
+            val = _lbl("--", "ns-stat")
+            self.tiles[key] = val
+            col.append(val)
+            stats.append(col)
+        main.append(stats)
+        page.append(main)
+
+        side = _box(Gtk.Orientation.VERTICAL, 22, "ns-side")
+        side.set_size_request(350, -1)
+
+        # fan control
+        fan = _box(Gtk.Orientation.VERTICAL, 10)
+        fan.append(_lbl("Controle de ventoinha", "ns-side-h"))
+        seg = _box(Gtk.Orientation.HORIZONTAL, 2, "ns-fan-seg")
+        seg.set_homogeneous(True)
+        self.home_fan_buttons = {}
+        first = None
+        for mode, text in (("auto", "Auto"), ("max", "Máx"), ("custom", "Pers."), ("curve", "Curva")):
+            b = Gtk.ToggleButton(label=text)
+            b.set_tooltip_text(FAN_NAMES[mode])
+            if first is None:
+                first = b
+            else:
+                b.set_group(first)
+            b.connect("toggled", self._fan_toggled, mode)
+            seg.append(b)
+            self.home_fan_buttons[mode] = b
+        fan.append(seg)
+        self.home_fan_hint = _lbl("", "ns-hint")
+        self.home_fan_hint.set_wrap(True)
+        fan.append(self.home_fan_hint)
+        self.home_custom_box = _box(Gtk.Orientation.VERTICAL, 10)
+        self.home_sliders, self.home_slider_vals, self.home_slider_cols = {}, {}, {}
+        for name, title_text, enabled in (("cpu", "Ventoinha da CPU", self.model.fan_cpu),
+                                          ("gpu", "Ventoinha da GPU", self.model.fan_gpu)):
+            col = _box(Gtk.Orientation.VERTICAL, 4)
+            top = _box(Gtk.Orientation.HORIZONTAL, 8)
+            lab = _lbl(title_text)
+            lab.set_hexpand(True)
+            top.append(lab)
+            val = _lbl("0%", "ns-accent")
+            self.home_slider_vals[name] = val
+            top.append(val)
+            col.append(top)
+            scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 10, 1)
+            scale.set_draw_value(False)
+            scale.set_hexpand(True)
+            scale.connect("change-value", self._home_scale_changed, name)
+            self.home_sliders[name] = scale
+            col.append(scale)
+            col.set_visible(enabled)
+            self.home_slider_cols[name] = col
+            self.home_custom_box.append(col)
+        fan.append(self.home_custom_box)
+        side.append(fan)
+
+        # power plan of the source in use (AC or battery)
+        power = _box(Gtk.Orientation.VERTICAL, 10)
+        phead = _box(Gtk.Orientation.HORIZONTAL, 8)
+        ptitle = _lbl("Modo de energia", "ns-side-h")
+        ptitle.set_hexpand(True)
+        phead.append(ptitle)
+        self.home_plan_source = _lbl("", "ns-hint", xalign=1.0)
+        phead.append(self.home_plan_source)
+        power.append(phead)
+        pbox = _box(Gtk.Orientation.HORIZONTAL, 6)
+        pbox.set_homogeneous(True)
+        self.home_plan_buttons = {}
+        first = None
+        for plan, sub in (("powersaver", "Economia"), ("balance", "Uso diário"),
+                          ("performance", "Potência")):
+            b = Gtk.ToggleButton()
+            b.add_css_class("ns-plan")
+            inner = _box(Gtk.Orientation.VERTICAL, 2)
+            inner.append(_lbl(PLAN_NAMES[plan], "ns-plan-name", xalign=0.5))
+            inner.append(_lbl(sub, "ns-dim", xalign=0.5))
+            b.set_child(inner)
+            if first is None:
+                first = b
+            else:
+                b.set_group(first)
+            b.connect("toggled", self._home_plan_toggled, plan)
+            pbox.append(b)
+            self.home_plan_buttons[plan] = b
+        power.append(pbox)
+        side.append(power)
+
+        # quick switches, mirrors of the switches that live in Cenário / Configurações / Bateria
+        quick = _box(Gtk.Orientation.VERTICAL, 10)
+        quick.set_vexpand(True)
+        quick.set_valign(Gtk.Align.END)
+        quick.append(_lbl("Atalhos", "ns-side-h"))
+        rows = _box(Gtk.Orientation.VERTICAL, 0, "ns-switches")
+        self.quick, self.quick_rows = {}, {}
+        for key, text, handler in (("coolboost", "CoolBoost™", self._coolboost_toggled),
+                                   ("winkey", "Bloquear tecla Windows", self._winkey_toggled),
+                                   ("overdrive", "Overdrive da tela", self._overdrive_toggled),
+                                   ("limit", "Limitar carga a 80%", self._battery_limit_toggled)):
+            r = _box(Gtk.Orientation.HORIZONTAL, 10, "ns-row")
+            lab = _lbl(text)
             lab.set_hexpand(True)
             r.append(lab)
-            val = _lbl("--", "ns-accent")
-            self.prof_vals[key] = val
-            r.append(val)
+            sw = _switch()
+            sw.connect("notify::active", self._switch_changed, handler)
+            r.append(sw)
             rows.append(r)
-        side.append(rows)
-        more = Gtk.Button(label="Detalhes ›")
-        more.add_css_class("ns-link")
-        more.set_halign(Gtk.Align.START)
-        more.connect("clicked", lambda *_: self._goto("scenario"))
-        side.append(more)
-
-        mon = _lbl("Monitoramento", "ns-h")
-        mon.set_margin_top(10)
-        side.append(mon)
-        grid = Gtk.Grid(column_spacing=8, row_spacing=8)
-        grid.set_column_homogeneous(True)
-        self.tiles = {}
-        for i, (key, title) in enumerate((("cpu_temp", "CPU"), ("gpu_temp", "GPU"),
-                                          ("cpu_load", "Carga da CPU"), ("ram", "RAM"),
-                                          ("disk_temp", "SSD"), ("disk_health", "Saúde do SSD"),
-                                          ("battery", "Bateria"), ("bat_health", "Saúde da bateria"))):
-            tile = _box(Gtk.Orientation.VERTICAL, 2, "ns-tile")
-            tile.append(_lbl(title, "ns-dim"))
-            val = _lbl("--", "ns-mid")
-            self.tiles[key] = val
-            tile.append(val)
-            grid.attach(tile, i % 2, i // 2, 1, 1)
-        side.append(grid)
-        more2 = Gtk.Button(label="Histórico ›")
-        more2.add_css_class("ns-link")
-        more2.set_halign(Gtk.Align.START)
-        more2.connect("clicked", lambda *_: self._goto("history"))
-        side.append(more2)
+            self.quick[key], self.quick_rows[key] = sw, r
+        quick.append(rows)
+        side.append(quick)
         page.append(side)
         return page
+
+    def _home_scale_changed(self, scale: Gtk.Scale, scroll, value: float, fan: str) -> bool:
+        res = self._scale_changed(scale, scroll, value, fan)
+        if self.state["fan"][f"{fan}_auto"]:  # moving the slider takes manual control
+            self._fan_auto(fan, False)
+        return res
+
+    def _home_plan_toggled(self, button: Gtk.ToggleButton, plan: str) -> None:
+        if button.get_active() and not self._updating:
+            self.plan_source = "ac" if self.ac_online else "battery"
+            self._plan_clicked(plan)
+
+    def _sync_quick(self) -> None:
+        for key, src in (("coolboost", self.coolboost), ("winkey", self.winkey_toggle),
+                         ("overdrive", self.overdrive_toggle),
+                         ("limit", self.battery_limit_toggle)):
+            self._set_switch(self.quick[key], src.get_active())
+            self.quick[key].set_sensitive(src.get_sensitive() or key == "coolboost")
 
     # ============================================================== scenario
     def _build_scenario(self) -> Gtk.Widget:
@@ -1391,6 +1517,8 @@ class MainWindow(Gtk.ApplicationWindow):
                    and bool(self.hw.get("backlight_timeout_supported"))}
         for name, r in self.settings_rows.items():
             r.set_visible(visible.get(name, True))
+        self.quick_rows["winkey"].set_visible(visible["winkey"])
+        self.quick_rows["overdrive"].set_visible(visible["overdrive"])
 
     def _layout_settings_if_changed(self) -> None:
         flags = tuple(bool(self.hw.get(k)) for k in ("gpu_mode_supported", "lcd_overdrive_supported",
@@ -1435,6 +1563,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _scale_changed(self, scale: Gtk.Scale, _scroll, value: float, fan: str) -> bool:
         step = max(0, min(10, round(value)))
         self.slider_vals[fan].set_label(f"{step * 10}%")
+        self.home_slider_vals[fan].set_label(f"{step * 10}%")
         if self._fan_timer[fan]:
             GLib.source_remove(self._fan_timer[fan])
 
@@ -1531,6 +1660,14 @@ class MainWindow(Gtk.ApplicationWindow):
         for mode, b in self.fan_buttons.items():
             self._set_toggle(b, mode == f["mode"])
         custom = f["mode"] == "custom"
+        for mode, b in self.home_fan_buttons.items():
+            self._set_toggle(b, mode == f["mode"])
+        self.home_custom_box.set_visible(custom)
+        self.home_fan_hint.set_visible(not custom)
+        self.home_fan_hint.set_label({
+            "auto": "A velocidade das ventoinhas acompanha a temperatura.",
+            "max": "Ventoinhas na rotação máxima. Mais frio e mais barulhento.",
+            "curve": "A velocidade segue a curva da aba Cenário."}.get(f["mode"], ""))
         self.custom_box.set_visible(custom)
         self.curve_box.set_visible(f["mode"] == "curve")
         for fan in ("cpu", "gpu"):
@@ -1539,9 +1676,12 @@ class MainWindow(Gtk.ApplicationWindow):
             if not self._fan_timer[fan]:
                 self._updating = True
                 self.sliders[fan].set_value(f[f"{fan}_percent"] // 10)
+                self.home_sliders[fan].set_value(f[f"{fan}_percent"] // 10)
                 self._updating = False
                 self.slider_vals[fan].set_label(f"{f[f'{fan}_percent'] // 10 * 10}%")
+                self.home_slider_vals[fan].set_label(f"{f[f'{fan}_percent'] // 10 * 10}%")
         self.coolboost.set_sensitive(f["mode"] == "auto")
+        self.quick["coolboost"].set_sensitive(f["mode"] == "auto")
 
     # ------------------------------------------------------- power plan
     def _seg_toggled(self, button: Gtk.ToggleButton, source: str) -> None:
@@ -1554,6 +1694,10 @@ class MainWindow(Gtk.ApplicationWindow):
         current = self.state["power"][source]
         for plan, b in self.plan_buttons.items():
             self._set_toggle(b, plan == current)
+        active = "ac" if self.ac_online else "battery"
+        for plan, b in self.home_plan_buttons.items():
+            self._set_toggle(b, plan == self.state["power"][active])
+        self.home_plan_source.set_label("Na tomada" if self.ac_online else "Na bateria")
 
     def _plan_toggled(self, button: Gtk.ToggleButton, plan: str) -> None:
         if button.get_active() and not self._updating:
@@ -1773,6 +1917,8 @@ class MainWindow(Gtk.ApplicationWindow):
             ready = bool(status.get("ready"))
             for sw in (self.overdrive_toggle, self.winkey_toggle, self.backlight_toggle):
                 sw.set_sensitive(ready)
+            self.quick_rows["limit"].set_visible(limit_ok)
+            self._sync_quick()
 
         self.rpm = {"cpu": sensors.get("cpu_fan"), "gpu": sensors.get("gpu_fan")}
         cpu_temp = sensors.get("cpu_temp")
@@ -1811,8 +1957,9 @@ class MainWindow(Gtk.ApplicationWindow):
         for name in ("cpu", "gpu"):
             temp, load = cur[name]
             frac = None if temp is None else (temp - 20) / 80
-            sub = "suspensa" if name == "gpu" and cur.get("gpu_suspended") else f"°{unit}"
-            self.g_temp[name].set_value(frac, "--" if temp is None else f"{_conv(temp, unit)}°", sub)
+            sub = ("suspensa" if name == "gpu" and cur.get("gpu_suspended") else
+                   "" if load is None else f"{round(load)}% de uso")
+            self.g_temp[name].set_value(frac, "--" if temp is None else f"{_conv(temp, unit)}°{unit}", sub)
             rpm = getattr(self, "rpm", {}).get(name)
             self.rpm_labels[name].set_label("-- RPM" if rpm is None else f"{rpm} RPM")
             vals = self.hist[name].temps()
@@ -1827,32 +1974,22 @@ class MainWindow(Gtk.ApplicationWindow):
             self.hist_now[name].set_label(
                 f"{_conv(temp, unit)}°  {'--' if load is None else round(load)}%"
                 + ("" if watts is None else f"  {watts:.0f} W") + clock)
-        gpu_load = cur["gpu"][1]
-        cpu_temp, cpu_load = cur["cpu"]
-        gpu_temp = cur["gpu"][0]
-        self.g_gpu_load.set_value(None if gpu_load is None else gpu_load / 100,
-                                  "--" if gpu_load is None else f"{round(gpu_load)}%",
-                                  "suspensa" if cur.get("gpu_suspended") else "")
-        self.home_gpu_load.set_label("--%" if gpu_load is None else f"{round(gpu_load)}%")
-        self.home_cpu_load.set_label("--%" if cpu_load is None else f"{round(cpu_load)}%")
-        self.tiles["cpu_temp"].set_label(f"{_conv(cpu_temp, unit)}°{unit}")
-        self.tiles["gpu_temp"].set_label(f"{_conv(gpu_temp, unit)}°{unit}")
-        self.tiles["cpu_load"].set_label("--" if cpu_load is None else f"{round(cpu_load)}%")
         ram = _ram_used_gb()
         self.tiles["ram"].set_label("--" if ram is None else f"{ram:.1f} GB".replace(".", ","))
         if self._disk_assess:
-            d, a = self._disk_assess[0]
-            self.tiles["disk_temp"].set_label(f"{_conv(d['temp'], unit)}°{unit}")
-            self.tiles["disk_health"].set_label(a["label"])
+            self.tiles["disk_health"].set_label(self._disk_assess[0][1]["label"])
         if self._bats:
             b = self._bats[0]
             self.tiles["battery"].set_label("--" if b["capacity"] is None else f"{b['capacity']:.0f}%")
             self.tiles["bat_health"].set_label(self._bat_assess[0][1]["label"] if b["health"] is not None else "--")
+            cap = "" if b["capacity"] is None else f" · {b['capacity']:.0f}%"
+            self.header_battery.set_label(("Na tomada" if self.ac_online else "Na bateria") + cap)
         plan = self.state["power"]["ac" if self.ac_online else "battery"]
-        self.prof_vals["mode"].set_label(PLAN_NAMES.get(plan, "--"))
-        self.prof_vals["fan"].set_label(FAN_NAMES.get(self.state["fan"]["mode"], "--"))
         cb = self.coolboost.get_active() and self.state["fan"]["mode"] == "auto"
-        self.prof_vals["coolboost"].set_label("Ligado" if cb else "Desligado")
+        self.home_scenario.set_label(
+            f"Modo: {PLAN_NAMES.get(plan, '--')} · Ventoinha: {FAN_NAMES.get(self.state['fan']['mode'], '--')}"
+            + (" · CoolBoost" if cb else ""))
+        self.model_labels["gpu"].set_label(self.gpu.name)
 
     def _show_status(self, text: str, error: bool = True) -> None:
         self._status_is_error = bool(text) and error

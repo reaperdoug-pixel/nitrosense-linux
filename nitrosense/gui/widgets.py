@@ -1,6 +1,6 @@
 """Purple dashboard widgets (ring gauge, history chart) and the application CSS.
 
-Palette follows the Mint-Y-Dark-Purple accent (#8c5dd9) so the app matches the desktop.
+Palette comes from the Magic Patterns NitroSense layout (deep violet background, lilac accent).
 """
 
 from __future__ import annotations
@@ -15,28 +15,51 @@ from gi.repository import Gtk  # noqa: E402
 from .controls import draw_text  # noqa: E402
 from .theme import rgba, rounded_rect  # noqa: E402
 
-BG = "#1c1c21"
-CARD = "#26262c"
-INNER = "#202026"
-BORDER = "#36363f"
-TRACK = "#3a3a44"
-TEXT = "#ece9f5"
-DIM = "#a09db0"
-ACCENT = "#8c5dd9"
-ACCENT_LIGHT = "#b08cf0"
+BG = "#0d0a13"
+CARD = "#16111f"
+INNER = "#1f182b"
+BORDER = "#2c2340"
+TRACK = "#2c2340"
+TEXT = "#efeaf7"
+DIM = "#9d93b1"
+ACCENT = "#a26bff"
+ACCENT_LIGHT = "#c4a1ff"
+ACCENT_DEEP = "#3a2463"
+HOT_FRAC = 0.8125  # 85 °C on the 20-100 °C temperature dial
 WARN = "#e8a23c"
-HOT = "#e5677d"
+HOT = "#ff5d7d"
 
 CSS = f"""
 window.nitrosense {{ background: {BG}; color: {TEXT}; }}
-.ns-title {{ font-weight: 700; font-size: 15px; letter-spacing: 2px; }}
+.ns-title {{ font-family: "Rajdhani", "Inter", sans-serif; font-weight: 700; font-size: 22px;
+            letter-spacing: 1px; }}
+.ns-title-sense {{ color: {ACCENT_LIGHT}; }}
+.ns-battery {{ color: {DIM}; font-size: 13px; margin-right: 10px; }}
+.ns-section {{ font-family: "Rajdhani", "Inter", sans-serif; font-size: 24px; font-weight: 600; }}
+.ns-stat {{ font-family: "Rajdhani", "Inter", sans-serif; font-size: 20px; font-weight: 600; }}
+.ns-side {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 12px; padding: 20px; }}
+.ns-plan-name {{ font-size: 13px; font-weight: 600; }}
+.ns-side-h {{ font-size: 13px; font-weight: 600; color: {DIM}; }}
+.ns-hint {{ color: {DIM}; font-size: 13px; }}
+.ns-switches {{ background: {INNER}; border: 1px solid {BORDER}; border-radius: 10px; }}
+.ns-switches .ns-row {{ padding: 9px 14px; }}
+.ns-fan-seg {{ background: {INNER}; border-radius: 10px; padding: 4px; }}
+.ns-fan-seg button {{ background: transparent; border: none; box-shadow: none; color: {DIM};
+                     border-radius: 7px; padding: 7px 4px; font-size: 13px; font-weight: 600; }}
+.ns-fan-seg button:hover {{ color: {TEXT}; }}
+.ns-fan-seg button:checked {{ background: {ACCENT}; color: {BG}; }}
+.ns-plan {{ background: {INNER}; border: 1px solid {BORDER}; border-radius: 10px; padding: 10px 10px;
+           color: {DIM}; box-shadow: none; }}
+.ns-plan:hover {{ border-color: {ACCENT}; }}
+.ns-plan:checked {{ background: {ACCENT_DEEP}; border-color: {ACCENT}; color: {ACCENT_LIGHT}; }}
+.ns-plan:checked .ns-dim {{ color: {DIM}; }}
 .ns-nav button {{ background: transparent; border: none; box-shadow: none; color: {DIM};
                  padding: 7px 18px; border-radius: 8px; font-size: 14px; }}
-.ns-nav button:hover {{ background: #2c2c34; color: {TEXT}; }}
-.ns-nav button:checked {{ background: {ACCENT}; color: #ffffff; }}
+.ns-nav button:hover {{ background: {INNER}; color: {TEXT}; }}
+.ns-nav button:checked {{ background: {ACCENT_DEEP}; color: {ACCENT_LIGHT}; }}
 .ns-win button {{ background: transparent; border: none; box-shadow: none; color: {DIM};
                  padding: 6px; min-width: 0; min-height: 0; border-radius: 8px; }}
-.ns-win button:hover {{ background: #2c2c34; color: #ffffff; }}
+.ns-win button:hover {{ background: {INNER}; color: #ffffff; }}
 .ns-card {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 12px; padding: 16px; }}
 .ns-h {{ font-size: 13px; color: {DIM}; }}
 .ns-big {{ font-size: 26px; font-weight: 700; color: #ffffff; }}
@@ -49,11 +72,11 @@ window.nitrosense {{ background: {BG}; color: {TEXT}; }}
 .ns-mode {{ background: {INNER}; border: 1px solid {BORDER}; border-radius: 12px;
            padding: 16px 18px; color: {DIM}; box-shadow: none; }}
 .ns-mode:hover {{ border-color: {ACCENT}; color: {TEXT}; }}
-.ns-mode:checked {{ background: {ACCENT}; border-color: {ACCENT}; color: #ffffff; }}
+.ns-mode:checked {{ background: {ACCENT_DEEP}; border-color: {ACCENT}; color: {ACCENT_LIGHT}; }}
 .ns-seg {{ background: {INNER}; border: 1px solid {BORDER}; border-radius: 8px; padding: 5px 14px;
           color: {DIM}; box-shadow: none; font-size: 13px; }}
 .ns-seg:hover {{ border-color: {ACCENT}; color: {TEXT}; }}
-.ns-seg:checked {{ background: {ACCENT}; border-color: {ACCENT}; color: #ffffff; }}
+.ns-seg:checked {{ background: {ACCENT}; border-color: {ACCENT}; color: {BG}; }}
 .ns-link {{ background: transparent; border: none; box-shadow: none; color: {ACCENT_LIGHT};
            padding: 4px 0; font-size: 13px; }}
 .ns-link:hover {{ color: #ffffff; }}
@@ -61,10 +84,11 @@ window.nitrosense {{ background: {BG}; color: {TEXT}; }}
 switch {{ background: {TRACK}; border: none; box-shadow: none; border-radius: 14px;
          min-width: 46px; min-height: 26px; }}
 switch:checked {{ background: {ACCENT}; }}
-switch slider {{ background: #ffffff; border: none; box-shadow: none; border-radius: 12px;
+switch slider {{ background: {TEXT}; border: none; box-shadow: none; border-radius: 12px;
                min-width: 22px; min-height: 22px; margin: 2px; }}
-.ns-mode:checked .ns-dim {{ color: #efe6ff; }}
-.ns-mode:checked label {{ color: #ffffff; }}
+.ns-mode:checked .ns-dim {{ color: {DIM}; }}
+.ns-mode:checked label {{ color: {ACCENT_LIGHT}; }}
+.ns-mode:checked .ns-dim {{ color: {DIM}; }}
 scale trough {{ background: {TRACK}; min-height: 6px; border-radius: 3px; border: none; }}
 scale trough highlight {{ background: {ACCENT}; border-radius: 3px; border: none; }}
 scale trough slider {{ background: #ffffff; min-width: 18px; min-height: 18px; border-radius: 9px;
@@ -88,9 +112,11 @@ popover > contents {{ background: {CARD}; border: 1px solid {BORDER}; border-rad
 class Gauge(Gtk.DrawingArea):
     """270-degree ring: a value 0..1, a big centre text and a small caption under it."""
 
-    def __init__(self, size: int = 150, color: str = ACCENT) -> None:
+    def __init__(self, size: int = 150, color: str = ACCENT, title: str = "",
+                 hot: float = 0.9) -> None:
         super().__init__()
         self.size, self.color = size, color
+        self.title, self.hot = title, hot
         self.frac = 0.0
         self.text = "--"
         self.sub = ""
@@ -115,12 +141,15 @@ class Gauge(Gtk.DrawingArea):
         cr.arc(cx, cy, r, start, start + sweep)
         cr.stroke()
         if self.frac > 0.005:
-            color = HOT if self.frac > 0.9 else self.color
+            color = HOT if self.frac >= self.hot else self.color
             cr.set_source_rgba(*rgba(color))
             cr.arc(cx, cy, r, start, start + sweep * self.frac)
             cr.stroke()
-        draw_text(cr, self.text, cx, cy - self.size * 0.14, self.size * 0.2, "#ffffff",
-                  bold=True, align="center")
+        if self.title:
+            draw_text(cr, self.title, cx, cy - self.size * 0.33, self.size * 0.085, DIM,
+                      bold=True, align="center")
+        draw_text(cr, self.text, cx, cy - self.size * 0.14, self.size * 0.2,
+                  HOT if self.frac >= self.hot else "#ffffff", bold=True, align="center")
         if self.sub:
             draw_text(cr, self.sub, cx, cy + self.size * 0.1, self.size * 0.085, DIM,
                       align="center")
