@@ -45,7 +45,7 @@ está em **português do Brasil**.
 
 | Aba | O que mostra ou faz |
 |---|---|
-| **Início** | Medidores de temperatura da CPU e da GPU, RPM das ventoinhas, consumo em watts, carga da GPU, o estado do desempenho (normal, ou limitado por calor ou potência) com o clock da CPU, resumo do cenário, saúde do SSD e da bateria num relance. |
+| **Início** | Medidores de temperatura da CPU e da GPU com o modelo, o RPM das ventoinhas, o consumo em watts e o uso, o estado do desempenho (normal, ou limitado por calor ou potência) com o clock da CPU, memória, saúde do SSD e da bateria num relance, e um painel lateral para trocar a ventoinha, o modo de energia e os atalhos sem sair da tela. |
 | **Cenário** | Planos de energia para tomada e bateria e o controle de ventoinha: **Automático**, **Máx**, **Personalizado** (controles da CPU e da GPU), **Curva** (um gráfico de temperatura por velocidade, arrastável, uma para as duas ventoinhas ou uma para cada, com regras de segurança) e **CoolBoost**. |
 | **Discos** | Saúde de NVMe, **SATA e HDD** pelo SMART: desgaste, reserva de células, setores defeituosos, rotação do HDD, horas ligado, dados gravados e lidos, desligamentos inesperados, erros de integridade, temperatura, espaço em uso e conselhos em linguagem simples, com o aviso de quando trocar. |
 | **Bateria** | Saúde (capacidade atual contra a original), ciclos, carga, consumo, autonomia, gráficos de histórico e um interruptor para **limitar a carga a cerca de 80%** e a **calibração** da bateria. |
@@ -177,11 +177,29 @@ a configuração e o histórico.
 Fechar a janela só fecha a interface. O serviço mantém suas configurações e continua gravando. A
 última aba usada e a unidade de temperatura (°C/°F) ficam guardadas por usuário.
 
+O visual segue um layout escuro em tons de violeta. O cabeçalho tem a marca, as abas e, à direita, a
+fonte de energia com a carga da bateria (por exemplo, "Na tomada · 100%"), a engrenagem das
+configurações e os botões de minimizar e fechar. Cada aba abre com um título e uma dica curta.
+
 ### Início
-Medidores de temperatura da CPU e da GPU com RPM das ventoinhas e consumo em watts, carga da GPU e
-um selo de estado: **Desempenho normal**, **CPU limitada por calor** ou **no limite de potência**,
-com o clock da CPU (por exemplo, "CPU 3,3 de 4,6 GHz") e a temperatura em que o processador começa
-a se proteger. Uma faixa no topo mostra o [alerta](#alertas) mais grave.
+À esquerda, os medidores de temperatura da **CPU** e da **GPU**, cada um com o modelo do chip, o uso,
+o RPM da ventoinha e o consumo em watts. O anel fica vermelho a partir de 85 °C. Abaixo, um selo de
+estado: **Desempenho normal**, **CPU limitada por calor** ou **no limite de potência**, com o clock
+da CPU (por exemplo, "CPU 3,3 de 4,6 GHz") e a temperatura em que o processador começa a se
+proteger, e uma faixa com a memória em uso, a saúde do SSD, a carga e a saúde da bateria. Quando a
+GPU dedicada está suspensa, o medidor mostra "suspensa" em vez de acordá-la. Uma faixa no topo mostra
+o [alerta](#alertas) mais grave.
+
+À direita, um painel de controle rápido:
+
+- **Controle de ventoinha**: Auto, Máx, Pers. e Curva. Em Pers. aparecem os controles da CPU e da
+  GPU. Mexer num deles já assume o controle manual daquela ventoinha. A curva em si se edita na aba
+  Cenário.
+- **Modo de energia**: Silencioso, Equilibrado ou Desempenho, para a fonte em uso agora (tomada ou
+  bateria).
+- **Atalhos**: **CoolBoost** (só no modo Automático), **Bloquear tecla Windows**, **Overdrive da
+  tela** e **Limitar carga a 80%**. São os mesmos interruptores de Cenário, Configurações e Bateria,
+  e os dois lados se mantêm iguais. Os que o modelo não suporta ficam escondidos.
 
 ### Cenário
 - **Plano de energia**: planos separados para a tomada e a bateria (Silencioso, Equilibrado,

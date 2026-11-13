@@ -47,7 +47,7 @@ The interface is in **Brazilian Portuguese**.
 
 | Tab | What it shows or does |
 |---|---|
-| **Início** (Home) | CPU and GPU temperature gauges, fan RPM, power in watts, GPU load, the performance state (normal, or held back by heat or power) with the CPU clock, scenario summary, SSD and battery health at a glance. |
+| **Início** (Home) | CPU and GPU temperature gauges with the chip model, fan RPM, power in watts and load, the performance state (normal, or held back by heat or power) with the CPU clock, memory, SSD and battery health at a glance, and a side panel to change the fan, the power mode and the shortcuts without leaving the screen. |
 | **Cenário** (Scenario) | Power plans for AC and battery, and fan control: **Auto**, **Max**, **Custom** (CPU and GPU sliders), **Curve** (a draggable temperature/speed graph, one for both fans or one per fan, with safety rules) and **CoolBoost**. |
 | **Discos** (Disks) | NVMe, **SATA and HDD** health from SMART: wear, spare capacity, bad sectors, HDD rotation speed, power-on hours, data written and read, unsafe shutdowns, media errors, temperature, file-system use and plain-language advice, with a warning of when to replace the disk. |
 | **Bateria** (Battery) | Health (full-charge capacity against the original), cycles, charge, power draw, time left, history charts, a switch to **limit charging to about 80 %** and the battery **calibration**. |
@@ -182,11 +182,30 @@ fans back on Auto; `sudo apt purge nitrosense` also deletes the configuration an
 Closing the window only closes the GUI. The service keeps your settings and keeps recording.
 The last tab you used and the temperature unit (°C/°F) are remembered per user.
 
+The look is a dark layout in shades of violet. The header holds the brand, the tabs and, on the
+right, the power source with the battery charge (for example "Na tomada · 100%"), the settings
+gear and the minimise and close buttons. Every tab opens with a title and a short hint.
+
 ### Início (Home)
-Temperature gauges for the CPU and GPU with fan RPM and power in watts, GPU load, and a status
-chip: **Desempenho normal**, **CPU limitada por calor** or **no limite de potência**, with the CPU
-clock (for example "CPU 3,3 de 4,6 GHz") and the temperature where the processor starts
-protecting itself. A banner on top shows the most serious [alert](#alerts).
+On the left, the temperature gauges for the **CPU** and the **GPU**, each with the chip model, the
+load, the fan RPM and the power in watts. The ring turns red from 85 °C. Below, a status chip:
+**Desempenho normal**, **CPU limitada por calor** or **no limite de potência**, with the CPU clock
+(for example "CPU 3,3 de 4,6 GHz") and the temperature where the processor starts protecting
+itself, and a strip with the memory in use, the SSD health, and the battery charge and health.
+When the discrete GPU is suspended the gauge says "suspensa" instead of waking it. A banner on top
+shows the most serious [alert](#alerts).
+
+On the right, a quick control panel:
+
+- **Fan control** (*Controle de ventoinha*): Auto, Max (*Máx*), Custom (*Pers.*) and Curve
+  (*Curva*). Custom shows the CPU and GPU sliders, and moving one takes manual control of that
+  fan. The curve itself is edited in the Cenário tab.
+- **Power mode** (*Modo de energia*): *Silencioso*, *Equilibrado* or *Desempenho*, for the source
+  in use right now (AC or battery).
+- **Shortcuts** (*Atalhos*): **CoolBoost** (Auto mode only), **Bloquear tecla Windows** (Windows key
+  lock), **Overdrive da tela** (LCD overdrive) and **Limitar carga a 80%** (charge limit). They are
+  the same switches as in Cenário, Settings and Bateria, and both sides stay equal. The ones the
+  model does not support are hidden.
 
 ### Cenário (Scenario)
 - **Power plan**: separate plans for AC and battery, shown as *Silencioso* (Power Saver),
