@@ -18,6 +18,14 @@ if [ -n "$PKG" ] && [ ! -e "$PKG" ]; then
 fi
 SRC="$(cd "$(dirname "$0")" && pwd)"
 USER_NAME="${SUDO_USER:-}"
+# Run a command as the invoking user (runuser is missing on some image-based systems).
+as_user() {
+    if command -v runuser >/dev/null 2>&1; then
+        runuser -u "$USER_NAME" -- "$@"
+    else
+        sudo -u "$USER_NAME" -- "$@"
+    fi
+}
 PRODUCT="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
 VENDOR="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)"
 
@@ -150,7 +158,7 @@ fi
 echo "==> Icon and menu entry"
 if [ "$IMMUTABLE" -eq 1 ]; then
     # create the per-user directories as the user, so none of them ends up owned by root
-    runuser -u "$USER_NAME" -- mkdir -p "$ICON_THEME" "$APPS_DIR" "$(dirname "$BIN_LINK")"
+    as_user mkdir -p "$ICON_THEME" "$APPS_DIR" "$(dirname "$BIN_LINK")"
 else
     rm -f /usr/share/applications/nitrosense.desktop \
           /usr/share/icons/hicolor/256x256/apps/nitrosense.png   # names used by older versions
@@ -193,7 +201,7 @@ udevadm trigger --sysname-match="event*" || true
 if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ]; then
     USER_ID="$(id -u "$USER_NAME")"
     if [ -S "/run/user/$USER_ID/bus" ]; then
-        runuser -u "$USER_NAME" -- env XDG_RUNTIME_DIR="/run/user/$USER_ID" \
+        as_user env XDG_RUNTIME_DIR="/run/user/$USER_ID" \
             DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_ID/bus" \
             python3 -I -c 'import sys; sys.path.insert(0, "/opt/nitrosense"); from nitrosense.shortcut import main; sys.exit(main(["install"]))' \
             || echo "    could not register the shortcut; run as your user: python3 -m nitrosense.shortcut install"

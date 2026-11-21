@@ -21,10 +21,18 @@ if [ -d /opt/nitrosense ]; then
     python3 -I -c 'import sys; sys.path.insert(0, "/opt/nitrosense"); from nitrosense.power import restore_defaults; restore_defaults()' || true
 fi
 USER_NAME="${SUDO_USER:-}"
+# Run a command as the invoking user (runuser is missing on some image-based systems).
+as_user() {
+    if command -v runuser >/dev/null 2>&1; then
+        runuser -u "$USER_NAME" -- "$@"
+    else
+        sudo -u "$USER_NAME" -- "$@"
+    fi
+}
 if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ] && [ -d /opt/nitrosense ]; then
     USER_ID="$(id -u "$USER_NAME")"
     if [ -S "/run/user/$USER_ID/bus" ]; then
-        runuser -u "$USER_NAME" -- env XDG_RUNTIME_DIR="/run/user/$USER_ID" \
+        as_user env XDG_RUNTIME_DIR="/run/user/$USER_ID" \
             DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_ID/bus" \
             python3 -I -c 'import sys; sys.path.insert(0, "/opt/nitrosense"); from nitrosense.shortcut import main; sys.exit(main(["remove"]))' || true
     fi
