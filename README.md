@@ -623,6 +623,15 @@ Com Secure Boot ligado, o módulo precisa estar assinado por uma MOK cadastrada.
 `sudo dpkg-reconfigure acpi-call-dkms` e reinicie; se a tela da MOK aparecer, escolha *Enroll MOK*.
 Depois de uma **atualização do kernel**, o DKMS recompila o módulo sozinho.
 
+**"unsigned module loading is restricted" (kernel lockdown)**
+Algumas imagens ligam `lockdown=integrity` mesmo com o Secure Boot desligado (o Bluefin Dakota
+faz isso em `/usr/lib/bootc/kargs.d/20-lockdown.toml`), e aí o kernel recusa o acpi_call. Veja com
+`cat /sys/kernel/security/lockdown`. No **ANV15-51** as ventoinhas continuam funcionando pelo driver
+`acer_wmi` do próprio kernel (Linux 6.19+): o instalador grava `/etc/modprobe.d/nitrosense-acer-wmi.conf`
+(`predator_v4=1 force_caps=0x1C26`) e segue sem o acpi_call. Auto, Máx, Personalizado e Curva funcionam;
+CoolBoost, limite de carga e iluminação não. `sudo tools/probe-acer-wmi.sh` mostra o que o `acer_wmi` expõe.
+Se as ventoinhas ficarem presas numa rotação fixa, escolha **Auto** no painel para devolvê-las ao firmware.
+
 **"permission denied"**: acrescente o seu usuário a `/etc/nitrosense/allowed-users`.
 
 **Uma aba diz que o serviço está desatualizado** (histórico, SMART, watts ou `gpu_holders` vazios): o

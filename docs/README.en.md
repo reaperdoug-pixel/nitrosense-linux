@@ -621,6 +621,15 @@ With Secure Boot on, the module must be signed by an enrolled MOK. Run
 `sudo dpkg-reconfigure acpi-call-dkms` and reboot; if the MOK screen appears, choose *Enroll MOK*.
 After a **kernel update**, DKMS rebuilds the module automatically.
 
+**"unsigned module loading is restricted" (kernel lockdown)**
+Some images turn on `lockdown=integrity` even with Secure Boot off (Bluefin Dakota does it in
+`/usr/lib/bootc/kargs.d/20-lockdown.toml`), and then the kernel refuses acpi_call. Check with
+`cat /sys/kernel/security/lockdown`. On the **ANV15-51** the fans keep working through the kernel's own
+`acer_wmi` driver (Linux 6.19+): the installer writes `/etc/modprobe.d/nitrosense-acer-wmi.conf`
+(`predator_v4=1 force_caps=0x1C26`) and carries on without acpi_call. Auto, Max, Custom and Curve work;
+CoolBoost, the charge limit and lighting do not. `sudo tools/probe-acer-wmi.sh` shows what `acer_wmi` exposes.
+If the fans stay stuck at a fixed speed, choose **Auto** in the panel to hand them back to the firmware.
+
 **"permission denied"**: add your user to `/etc/nitrosense/allowed-users`.
 
 **A tab says the service is not updated** (history, SMART, power or "gpu_holders" empty): the

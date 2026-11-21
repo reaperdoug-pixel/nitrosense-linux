@@ -45,6 +45,8 @@ fi
 pkill -f /opt/nitrosense/bin/nitrosense-watch 2>/dev/null || true
 rm -f /etc/xdg/autostart/nitrosense-watch.desktop
 rm -f /etc/systemd/system/nitrosensed.service /etc/modules-load.d/nitrosense.conf
+# acer_wmi options (see install.sh); the driver keeps them until it is reloaded or a reboot
+rm -f /etc/modprobe.d/nitrosense-acer-wmi.conf
 # image-based systems: the acpi_call loader, the modules built for each kernel and the
 # per-user menu entry, icons and command (see install.sh)
 if [ -f /etc/systemd/system/nitrosense-acpi-call.service ]; then

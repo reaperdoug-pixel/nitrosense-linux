@@ -82,14 +82,50 @@ else
         || echo "    smartctl not in root's PATH: SATA/HDD health unavailable (NVMe is read natively)"
 fi
 
-if [ "$IMMUTABLE" -eq 0 ]; then
-    echo "==> Loading acpi_call (signed by DKMS with your enrolled MOK key)"
-    if ! modprobe acpi_call; then
-        echo "acpi_call could not be loaded. With Secure Boot on, the DKMS module must be" >&2
-        echo "signed with an enrolled MOK key (see README)." >&2
+# Options for the in-kernel acer_wmi driver, for models that ship them (data/models/<model>/
+# acer-wmi.conf). On the ANV15-51 they expose fan RPM and fan control (hwmon pwm) and the
+# firmware thermal profiles. force_caps replaces the driver's whole capability mask, so it is
+# only installed for the model it was written for.
+ACER_WMI_CONF=/etc/modprobe.d/nitrosense-acer-wmi.conf
+if [ -f "$SRC/data/models/$PRODUCT/acer-wmi.conf" ]; then
+    echo "==> acer_wmi options for $PRODUCT"
+    install -m 0644 "$SRC/data/models/$PRODUCT/acer-wmi.conf" "$ACER_WMI_CONF"
+    if modprobe -r acer_wmi 2>/dev/null && modprobe acer_wmi; then
+        echo "    acer_wmi reloaded"
+    else
+        echo "    acer_wmi is in use: the options take effect after a reboot"
+    fi
+fi
+
+# acer_wmi's hwmon fan control (pwm1/pwm2): the service drives the fans through it when
+# acpi_call cannot be loaded, e.g. under kernel lockdown=integrity.
+acer_wmi_fans() {
+    local hw
+    for hw in /sys/class/hwmon/hwmon*; do
+        [ "$(cat "$hw/name" 2>/dev/null)" = acer ] && [ -e "$hw/pwm1_enable" ] && return 0
+    done
+    return 1
+}
+ACPI_CALL=1
+no_acpi_call() {
+    if acer_wmi_fans; then
+        echo "    WARNING: continuing without acpi_call. The fans work through acer_wmi;" >&2
+        echo "    CoolBoost, the battery charge limit and keyboard lighting stay unavailable." >&2
+        ACPI_CALL=0
+    else
         exit 1
     fi
-    echo acpi_call > /etc/modules-load.d/nitrosense.conf
+}
+
+if [ "$IMMUTABLE" -eq 0 ]; then
+    echo "==> Loading acpi_call (signed by DKMS with your enrolled MOK key)"
+    if modprobe acpi_call; then
+        echo acpi_call > /etc/modules-load.d/nitrosense.conf
+    else
+        echo "acpi_call could not be loaded. With Secure Boot on, the DKMS module must be" >&2
+        echo "signed with an enrolled MOK key (see README)." >&2
+        no_acpi_call
+    fi
 else
     echo "==> Loading acpi_call (built by tools/build-acpi_call.sh)"
     install -m 0644 "$SRC/data/nitrosense-acpi-call.service" /etc/systemd/system/nitrosense-acpi-call.service
@@ -99,20 +135,23 @@ else
         echo "No acpi_call module for kernel $(uname -r). As your user (not root), run:" >&2
         echo "    $SRC/tools/build-acpi_call.sh" >&2
         echo "then run this installer again." >&2
-        exit 1
-    fi
-    systemctl enable nitrosense-acpi-call.service
-    systemctl start nitrosense-acpi-call.service
-    if [ ! -e /proc/acpi/call ]; then
-        echo "acpi_call could not be loaded; see: journalctl -u nitrosense-acpi-call" >&2
-        exit 1
+        no_acpi_call
+    else
+        systemctl enable nitrosense-acpi-call.service
+        systemctl start nitrosense-acpi-call.service || true
+        if [ ! -e /proc/acpi/call ]; then
+            echo "acpi_call could not be loaded; see: journalctl -u nitrosense-acpi-call" >&2
+            no_acpi_call
+        fi
     fi
 fi
 
-echo "==> Read-only hardware probe (getters only)"
-if ! python3 -I "$SRC/tools/probe.py"; then
-    echo "Probe failed; the service was NOT installed." >&2
-    exit 1
+if [ "$ACPI_CALL" -eq 1 ]; then
+    echo "==> Read-only hardware probe (getters only)"
+    if ! python3 -I "$SRC/tools/probe.py"; then
+        echo "Probe failed; the service was NOT installed." >&2
+        exit 1
+    fi
 fi
 
 echo "==> Copying program to /opt/nitrosense"
