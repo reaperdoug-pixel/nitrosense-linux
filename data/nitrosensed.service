@@ -1,6 +1,9 @@
 [Unit]
 Description=NitroSense for Linux hardware service (Acer WMI: fans, keyboard lighting, power plans)
-After=systemd-modules-load.service power-profiles-daemon.service nitrosense-acpi-call.service
+# Not ordered after power-profiles-daemon: its unit runs After=multi-user.target, so ordering
+# against it while WantedBy=multi-user.target is a cycle and systemd drops this job at boot.
+# powerprofilesctl reaches ppd through D-Bus activation anyway.
+After=systemd-modules-load.service nitrosense-acpi-call.service
 Wants=systemd-modules-load.service nitrosense-acpi-call.service
 
 [Service]
