@@ -121,6 +121,7 @@ def make_daemon(state_dir: str | None = None):
     d = dmod.Daemon()
     d.ctl.wmi = FakeWmi()
     d.ready = True
+    d.fan_control = True
     d._rapl = d._rapl_rec = FakeRapl()
     d.hw_battery_limit = d.ctl.get_battery_limit()
     d.hw_battery_calibration = d.ctl.get_battery_calibration()

@@ -88,6 +88,7 @@ switch {{ background: {TRACK}; border: none; box-shadow: none; border-radius: 14
 switch:checked {{ background: {ACCENT}; }}
 switch slider {{ background: {TEXT}; border: none; box-shadow: none; border-radius: 12px;
                min-width: 22px; min-height: 22px; margin: 2px; }}
+.ns-fan-seg button:disabled, .ns-mode:disabled, .ns-seg:disabled, switch:disabled {{ opacity: 0.4; }}
 .ns-mode:checked .ns-dim {{ color: {DIM}; }}
 .ns-mode:checked label {{ color: {ACCENT_LIGHT}; }}
 .ns-mode:checked .ns-dim {{ color: {DIM}; }}

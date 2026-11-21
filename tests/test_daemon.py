@@ -155,6 +155,36 @@ class DaemonTests(unittest.TestCase):
             self.d.handle({"cmd": "set_coolboost", "on": 1})
 
 
+class HwmonFanTests(unittest.TestCase):
+    def _hwmon(self, root, idx, name, files):
+        d = os.path.join(root, f"hwmon{idx}")
+        os.makedirs(d)
+        for fname, value in dict(files, name=name).items():
+            with open(os.path.join(d, fname), "w") as f:
+                f.write(f"{value}\n")
+
+    def test_reads_acer_wmi_fans(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._hwmon(root, 0, "coretemp", {"temp1_input": 62000})
+            self._hwmon(root, 1, "acer", {"fan1_input": 2469, "fan2_input": 2359})
+            real_glob = dmod.glob.glob
+            dmod.glob.glob = lambda pat: real_glob(pat.replace("/sys/class/hwmon", root))
+            try:
+                self.assertEqual(dmod._hwmon_fans(), (2469, 2359))
+            finally:
+                dmod.glob.glob = real_glob
+
+    def test_no_acer_hwmon(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._hwmon(root, 0, "coretemp", {"temp1_input": 62000})
+            real_glob = dmod.glob.glob
+            dmod.glob.glob = lambda pat: real_glob(pat.replace("/sys/class/hwmon", root))
+            try:
+                self.assertEqual(dmod._hwmon_fans(), (None, None))
+            finally:
+                dmod.glob.glob = real_glob
+
+
 class SocketTests(unittest.TestCase):
     def test_roundtrip(self):
         d = make_daemon()

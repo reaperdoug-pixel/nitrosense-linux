@@ -27,6 +27,9 @@ from .widgets import (ACCENT, ACCENT_LIGHT, BG, CSS, HOT_FRAC, FanCurveEditor,  
 PREFS = os.path.join(GLib.get_user_config_dir(), "nitrosense", "gui.json")
 
 PLAN_NAMES = {"powersaver": "Silencioso", "balance": "Equilibrado", "performance": "Desempenho"}
+FAN_LOCKED_HINT = ("O firmware está controlando as ventoinhas sozinho: o controle manual "
+                   "precisa do módulo acpi_call, que não está carregado. Para refrigerar mais, "
+                   "use o modo Desempenho.")
 FAN_NAMES = {"auto": "Automático", "max": "Máx", "custom": "Personalizado", "curve": "Curva"}
 GPU_SUSPENDED = "GPU dedicada suspensa (economizando energia)"
 
@@ -160,6 +163,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.state = default_state(self.model.zone_default_colors)
         self.hw: dict = {}
         self.ac_online = True
+        self._hw_ready = True  # False while the service runs without the WMI path (no acpi_call)
+        self._fan_ready = True  # fans can still be driven through acer_wmi's hwmon pwm then
         self.plan_source = "ac"
         self._poll_busy = False
         self._status_is_error = False
@@ -494,7 +499,8 @@ class MainWindow(Gtk.ApplicationWindow):
                          ("overdrive", self.overdrive_toggle),
                          ("limit", self.battery_limit_toggle)):
             self._set_switch(self.quick[key], src.get_active())
-            self.quick[key].set_sensitive(src.get_sensitive() or key == "coolboost")
+            self.quick[key].set_sensitive(src.get_sensitive()
+                                          or (key == "coolboost" and self._hw_ready))
 
     # ============================================================== scenario
     def _build_scenario(self) -> Gtk.Widget:
@@ -1676,18 +1682,27 @@ class MainWindow(Gtk.ApplicationWindow):
         self._send("set_coolboost", on=on)
 
     def _update_fan_ui(self) -> None:
-        f = self.state["fan"]
+        # Without the WMI path (acpi_call missing, e.g. kernel lockdown) no fan command reaches
+        # the firmware: show what really happens, the firmware's automatic mode, and lock the
+        # controls instead of pretending the saved mode is in effect.
+        ready = self._fan_ready
+        f = dict(self.state["fan"])
+        if not ready:
+            f["mode"] = "auto"
         for mode, b in self.fan_buttons.items():
             self._set_toggle(b, mode == f["mode"])
+            b.set_sensitive(ready)
         custom = f["mode"] == "custom"
         for mode, b in self.home_fan_buttons.items():
             self._set_toggle(b, mode == f["mode"])
+            b.set_sensitive(ready)
         self.home_custom_box.set_visible(custom)
         self.home_fan_hint.set_visible(not custom)
         self.home_fan_hint.set_label({
             "auto": "A velocidade das ventoinhas acompanha a temperatura.",
             "max": "Ventoinhas na rotação máxima. Mais frio e mais barulhento.",
-            "curve": "A velocidade segue a curva da aba Cenário."}.get(f["mode"], ""))
+            "curve": "A velocidade segue a curva da aba Cenário."}.get(f["mode"], "")
+            if ready else FAN_LOCKED_HINT)
         self.custom_box.set_visible(custom)
         self.curve_box.set_visible(f["mode"] == "curve")
         for fan in ("cpu", "gpu"):
@@ -1700,8 +1715,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 self._updating = False
                 self.slider_vals[fan].set_label(f"{f[f'{fan}_percent'] // 10 * 10}%")
                 self.home_slider_vals[fan].set_label(f"{f[f'{fan}_percent'] // 10 * 10}%")
-        self.coolboost.set_sensitive(f["mode"] == "auto")
-        self.quick["coolboost"].set_sensitive(f["mode"] == "auto")
+        self.coolboost.set_sensitive(self._hw_ready and f["mode"] == "auto")
+        self.quick["coolboost"].set_sensitive(self._hw_ready and f["mode"] == "auto")
 
     # ------------------------------------------------------- power plan
     def _seg_toggled(self, button: Gtk.ToggleButton, source: str) -> None:
@@ -1903,8 +1918,10 @@ class MainWindow(Gtk.ApplicationWindow):
                 self._sync_curves(self.state["fan_curve"])
             self._update_curve_status(status.get("fan_curve") or {})
             self.hw = status.get("hw", {})
+            self._fan_ready = bool(self.hw.get("fan_control", status.get("ready")))
             self.ac_online = status.get("ac", True)
             sensors = status.get("sensors", {})
+            self._hw_ready = bool(status.get("ready"))
             if not status.get("ready"):
                 self._show_status("Interface de hardware indisponível: " + (status.get("error") or ""))
             elif self.status_label.get_label().startswith(("Serviço do NitroSense", "lost conn",
@@ -1917,8 +1934,8 @@ class MainWindow(Gtk.ApplicationWindow):
             else:
                 self._show_plan_tab(self.plan_source)
             hw_cb = self.hw.get("coolboost")
-            self._set_switch(self.coolboost, self.state["coolboost"]
-                             if self.state["coolboost"] is not None else bool(hw_cb))
+            self._set_switch(self.coolboost, self._hw_ready and (
+                self.state["coolboost"] if self.state["coolboost"] is not None else bool(hw_cb)))
             od = self.hw.get("lcd_overdrive")
             self._set_switch(self.overdrive_toggle,
                              od if od is not None else bool(self.state["lcd_overdrive"]))
@@ -2005,9 +2022,10 @@ class MainWindow(Gtk.ApplicationWindow):
             cap = "" if b["capacity"] is None else f" · {b['capacity']:.0f}%"
             self.header_battery.set_label(("Na tomada" if self.ac_online else "Na bateria") + cap)
         plan = self.state["power"]["ac" if self.ac_online else "battery"]
-        cb = self.coolboost.get_active() and self.state["fan"]["mode"] == "auto"
+        fan_mode = self.state["fan"]["mode"] if self._fan_ready else "auto"
+        cb = self.coolboost.get_active() and fan_mode == "auto"
         summary = (f"Modo: {PLAN_NAMES.get(plan, '--')} · Ventoinha: "
-                   f"{FAN_NAMES.get(self.state['fan']['mode'], '--')}" + (" · CoolBoost" if cb else ""))
+                   f"{FAN_NAMES.get(fan_mode, '--')}" + (" · CoolBoost" if cb else ""))
         self.home_scenario.set_label(summary)
         self.scenario_hint.set_label(summary)
         self.model_labels["gpu"].set_label(self.gpu.name)

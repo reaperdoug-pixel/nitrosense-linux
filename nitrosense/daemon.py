@@ -38,6 +38,7 @@ from .sysmon import CpuLoad, GpuMonitor, gpu_throttle
 from .controller import Controller, wait_for_acpi_call
 from .protocol import (ALLOWED_USERS_FILE, MAX_REQUEST, SOCKET_DIR, SOCKET_PATH,
                        HISTORY_DIR, STATE_DIR, STATE_FILE, default_state)
+from .hwmonfan import HwmonFans, find_pwm_hwmon
 from .wmi import WmiError
 
 log = logging.getLogger("nitrosense.daemon")
@@ -98,6 +99,9 @@ class Daemon:
     def __init__(self) -> None:
         self.model = model_cfg.load()
         self.ctl = Controller(adjust=enc.ColorAdjust(*self.model.zone_adjust))
+        # Fan backend: the WMI controller, or acer_wmi's hwmon pwm when acpi_call is missing.
+        self.fans = self.ctl
+        self.fan_control = False
         self.lock = threading.RLock()
         self.state = self._load_state()
         self.ready = False
@@ -184,6 +188,7 @@ class Daemon:
             log.error("hardware interface unavailable: %s", why)
         else:
             self.ready = True
+            self.fan_control = True
             self.gpu_mode_supported = self.ctl.gpu_mode_supported()
             if self.gpu_mode_supported:
                 self.gpu_mode = self.ctl.get_gpu_mode()
@@ -193,6 +198,12 @@ class Daemon:
             self.hw_battery_calibration = self.ctl.get_battery_calibration()
             bl = self.ctl.get_backlight()
             self.hw_backlight_timeout = bl[1] if bl else None
+        if not self.ready:
+            pwm = find_pwm_hwmon()
+            if pwm:
+                self.fans = HwmonFans(pwm)
+                self.fan_control = True
+                log.info("fan control through acer_wmi hwmon (%s)", pwm)
         self.reapply("startup")
 
     def reapply(self, reason: str) -> None:
@@ -222,6 +233,11 @@ class Daemon:
                     fn()
                 except (WmiError, KeyError, ValueError) as e:
                     log.warning("re-apply %s failed: %s", name, e)
+        elif self.fan_control:
+            try:
+                self._reapply_fan(st)
+            except (WmiError, KeyError, ValueError) as e:
+                log.warning("re-apply fan failed: %s", e)
         if st["power_applied"]:
             self.apply_power(force=True)
 
@@ -230,7 +246,7 @@ class Daemon:
             self.curve.reset()          # the curve thread sets the speed on its next step
             self.fan_curve_step(0.0)
         else:
-            self.ctl.set_fan_mode(**st["fan"])
+            self.fans.set_fan_mode(**st["fan"])
 
     # ------------------------------------------------------- fan curve
     def start_fan_curve(self, interval: float = 2.0) -> None:
@@ -251,7 +267,7 @@ class Daemon:
                 if self.curve.applied is not None or self.curve.failsafe:
                     self.curve.reset()
                 return
-            if not self.ready:
+            if not self.fan_control:
                 return
             s = self.sensors()
             gpu = s["gpu_temp"] if self._gpu_probe.awake() else None  # asleep: value is not real
@@ -259,14 +275,14 @@ class Daemon:
             try:
                 if plan.release:
                     log.warning("no temperature readings: fans back to automatic")
-                    self.ctl.set_fan_mode("auto")
+                    self.fans.set_fan_mode("auto")
                 elif plan.enter:
-                    self.ctl.set_fan_mode("custom", False, False, plan.cpu, plan.gpu)
+                    self.fans.set_fan_mode("custom", False, False, plan.cpu, plan.gpu)
                 else:
                     if plan.cpu is not None:
-                        self.ctl.set_fan_speed("cpu", plan.cpu)
+                        self.fans.set_fan_speed("cpu", plan.cpu)
                     if plan.gpu is not None:
-                        self.ctl.set_fan_speed("gpu", plan.gpu)
+                        self.fans.set_fan_speed("gpu", plan.gpu)
             except WmiError as e:
                 log.warning("fan curve could not set the fans: %s", e)
                 self.curve.reset()  # try again from scratch next time
@@ -274,9 +290,9 @@ class Daemon:
     def release_fans(self) -> None:
         """On shutdown give the fans back to the firmware (a custom speed would stay otherwise)."""
         with self.fan_lock:
-            if self.ready and self.state["fan"]["mode"] == "curve" and self.curve.applied is not None:
+            if self.fan_control and self.state["fan"]["mode"] == "curve" and self.curve.applied is not None:
                 try:
-                    self.ctl.set_fan_mode("auto")
+                    self.fans.set_fan_mode("auto")
                 except WmiError as e:
                     log.warning("could not release the fans: %s", e)
 
@@ -306,6 +322,8 @@ class Daemon:
             data["gpu_fan"] = self.ctl.read_sensor(enc.SENSOR_GPU_FAN)
         if not data["cpu_temp"]:
             data["cpu_temp"] = _hwmon_temp(("k10temp", "coretemp", "zenpower"))
+        if data["cpu_fan"] is None and data["gpu_fan"] is None:
+            data["cpu_fan"], data["gpu_fan"] = _hwmon_fans()
         watts = self._rapl.sample()
         data["cpu_power"], data["igpu_power"], data["sys_power"] = (
             watts.get("cpu"), watts.get("igpu"), watts.get("sys"))
@@ -457,6 +475,7 @@ class Daemon:
                            "backlight_timeout": self.hw_backlight_timeout,
                            "backlight_timeout_supported": self.backlight_timeout_supported,
                            "gpu_mode_supported": self.gpu_mode_supported,
+                           "fan_control": self.fan_control,
                            "gpu_mode": self.gpu_mode}}
         if cmd == "disks":
             return {"ok": True, "smart": self.smart()}
@@ -477,7 +496,7 @@ class Daemon:
             if (source == "ac") == power.ac_online():
                 power.apply_plan(plan)
             return {"ok": True}
-        if not self.ready:
+        if not self.ready and not (self.fan_control and cmd in FAN_COMMANDS):
             return {"ok": False, "error": self.error or "hardware interface unavailable"}
         handler = getattr(self, "cmd_" + str(cmd), None)
         if handler is None:
@@ -497,7 +516,7 @@ class Daemon:
                 if k in req:
                     fan[k] = _int(req[k], 0, 100) // 10 * 10
             if fan["mode"] != "curve":
-                self.ctl.set_fan_mode(**fan)
+                self.fans.set_fan_mode(**fan)
             with self.lock:
                 self.state["fan"] = fan
                 self._save_state()
@@ -529,7 +548,7 @@ class Daemon:
             with self.lock:
                 if self.state["fan"]["mode"] != "custom":
                     raise ValidationError("fan speed can only be set in Custom mode")
-            self.ctl.set_fan_speed(fan, pct)
+            self.fans.set_fan_speed(fan, pct)
             with self.lock:
                 self.state["fan"][fan + "_percent"] = pct
                 self._save_state()
@@ -699,6 +718,9 @@ class Daemon:
         self.gpu_mode = 1 if on else 2
 
 
+FAN_COMMANDS = ("set_fan", "set_fan_curve", "set_fan_speed")
+
+
 def _hwmon_temp(names) -> int | None:
     for hw in glob.glob("/sys/class/hwmon/hwmon*"):
         try:
@@ -710,6 +732,30 @@ def _hwmon_temp(names) -> int | None:
         except (OSError, ValueError):
             continue
     return None
+
+
+def _hwmon_fans(name: str = "acer") -> tuple[int | None, int | None]:
+    """CPU and GPU fan RPM from the in-kernel acer_wmi driver (needs acer_wmi predator_v4=1).
+
+    Used when the WMI path through acpi_call is unavailable, e.g. under kernel lockdown.
+    acer_wmi registers the CPU fan as fan1 and the GPU fan as fan2.
+    """
+    for hw in glob.glob("/sys/class/hwmon/hwmon*"):
+        try:
+            with open(os.path.join(hw, "name")) as f:
+                if f.read().strip() != name:
+                    continue
+        except OSError:
+            continue
+        rpm: list[int | None] = []
+        for i in (1, 2):
+            try:
+                with open(os.path.join(hw, f"fan{i}_input")) as f:
+                    rpm.append(int(f.read()))
+            except (OSError, ValueError):
+                rpm.append(None)
+        return rpm[0], rpm[1]
+    return None, None
 
 
 def _allowed_uids() -> set[int]:
