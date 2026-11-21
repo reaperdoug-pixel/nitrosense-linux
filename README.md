@@ -170,6 +170,38 @@ os dois métodos: rode `sudo ./uninstall.sh` antes de trocar de um para o outro.
 `sudo apt remove nitrosense` devolve as ventoinhas ao Automático; `sudo apt purge nitrosense` apaga também
 a configuração e o histórico.
 
+### Bluefin e outros sistemas imutáveis
+
+Em sistemas baseados em imagem (Bluefin, Aurora, Bazzite, GNOME OS e parecidos) o `/usr` é somente
+leitura, não há `apt` nem DKMS e a imagem não traz os headers do kernel. O `install.sh` detecta isso
+sozinho e muda três coisas:
+
+- **`acpi_call`**: em vez do `acpi-call-dkms`, o módulo é compilado por `tools/build-acpi_call.sh`
+  e carregado no boot pelo serviço `nitrosense-acpi-call`, a partir de
+  `/var/lib/nitrosense-kmod/<versão do kernel>/`.
+- **Dependências**: nada é instalado; o instalador só confere se o Python do sistema tem PyGObject,
+  pycairo e GTK 4.10+ (o Bluefin já traz).
+- **Menu, ícones e comando** vão para o seu `~/.local` (`share/applications`, `share/icons` e
+  `bin/nitrosense`); o programa, o serviço e a configuração continuam em `/opt`, `/etc` e `/var`.
+
+```bash
+tools/build-acpi_call.sh     # como seu usuário: compila num container (podman) e instala com sudo
+sudo ./install.sh
+```
+
+O script compila o `acpi_call` contra o código-fonte do kernel.org da mesma versão do kernel em uso,
+com o `config` que a imagem traz em `/usr/lib/modules/<versão>/config`, dentro de um container Fedora
+descartável. Antes de instalar, ele compara o tamanho do `struct module` com o BTF do kernel em uso e
+confere o *vermagic* e os símbolos; se algo não bater, para sem instalar. Só funciona com kernels
+"de vitrine" do kernel.org (versão sem sufixo, como `7.2.6`) e com o Secure Boot desligado (o módulo
+não é assinado).
+
+**Depois de toda atualização que trouxer um kernel novo**, rode de novo
+`/opt/nitrosense/tools/build-acpi_call.sh`: até lá, o serviço avisa que o `acpi_call` não está
+carregado e o painel fica sem sensores e sem controle de ventoinha.
+
+Desenvolvido e testado num ANV15-51 com o Bluefin (imagem `dakota-nvidia`, kernel 7.2.6).
+
 ---
 
 ## Usando o painel

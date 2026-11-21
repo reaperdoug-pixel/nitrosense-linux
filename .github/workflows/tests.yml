@@ -14,7 +14,7 @@ jobs:
         run: python3 -m unittest discover -s tests -v
       - name: Shell scripts parse
         run: |
-          for f in install.sh uninstall.sh packaging/build-deb.sh packaging/debian/preinst \
+          for f in install.sh uninstall.sh tools/build-acpi_call.sh packaging/build-deb.sh packaging/debian/preinst \
                    packaging/debian/postinst packaging/debian/prerm packaging/debian/postrm; do
             bash -n "$f"
           done

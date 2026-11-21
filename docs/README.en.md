@@ -175,6 +175,38 @@ register the NitroSense key shortcut; for that, logged in to the desktop, run
 `sudo ./uninstall.sh` before switching from one to the other. `sudo apt remove nitrosense` puts the
 fans back on Auto; `sudo apt purge nitrosense` also deletes the configuration and the history.
 
+### Bluefin and other image-based systems
+
+On image-based systems (Bluefin, Aurora, Bazzite, GNOME OS and similar) `/usr` is read-only, there
+is no `apt` or DKMS, and the image ships no kernel headers. `install.sh` detects this on its own and
+changes three things:
+
+- **`acpi_call`**: instead of `acpi-call-dkms`, the module is built by `tools/build-acpi_call.sh`
+  and loaded at boot by the `nitrosense-acpi-call` service from
+  `/var/lib/nitrosense-kmod/<kernel version>/`.
+- **Dependencies**: nothing is installed; the installer only checks that the system Python has
+  PyGObject, pycairo and GTK 4.10+ (Bluefin ships them).
+- **Menu entry, icons and command** go to your `~/.local` (`share/applications`, `share/icons` and
+  `bin/nitrosense`); the program, the service and the configuration stay in `/opt`, `/etc` and `/var`.
+
+```bash
+tools/build-acpi_call.sh     # as your user: builds in a container (podman), installs with sudo
+sudo ./install.sh
+```
+
+The script builds `acpi_call` against the kernel.org source of the running kernel's version, with
+the `config` the image ships in `/usr/lib/modules/<version>/config`, inside a throwaway Fedora
+container. Before installing it compares the size of `struct module` with the running kernel's BTF
+and checks the *vermagic* and the symbols; if anything does not match it stops without installing.
+It only works with stock kernel.org kernels (a version with no suffix, such as `7.2.6`) and with
+Secure Boot off (the module is not signed).
+
+**After every update that brings a new kernel**, run `/opt/nitrosense/tools/build-acpi_call.sh`
+again: until then the service reports that `acpi_call` is not loaded and the dashboard has no
+sensors and no fan control.
+
+Developed and tested on an ANV15-51 with Bluefin (`dakota-nvidia` image, kernel 7.2.6).
+
 ---
 
 ## Using the dashboard

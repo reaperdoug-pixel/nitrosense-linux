@@ -37,6 +37,23 @@ fi
 pkill -f /opt/nitrosense/bin/nitrosense-watch 2>/dev/null || true
 rm -f /etc/xdg/autostart/nitrosense-watch.desktop
 rm -f /etc/systemd/system/nitrosensed.service /etc/modules-load.d/nitrosense.conf
+# image-based systems: the acpi_call loader, the modules built for each kernel and the
+# per-user menu entry, icons and command (see install.sh)
+if [ -f /etc/systemd/system/nitrosense-acpi-call.service ]; then
+    systemctl disable --now nitrosense-acpi-call.service 2>/dev/null || true
+    rm -f /etc/systemd/system/nitrosense-acpi-call.service
+fi
+rm -rf /var/lib/nitrosense-kmod
+if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ]; then
+    USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+    rm -f "$USER_HOME/.local/share/applications/io.github.napejoon.NitroSense.desktop" \
+          "$USER_HOME/.local/bin/nitrosense" \
+          "$USER_HOME/.local/share/icons/hicolor/scalable/apps/io.github.napejoon.NitroSense.svg" \
+          "$USER_HOME/.local/share/icons/hicolor/scalable/apps/nitrosense-tray.svg" \
+          "$USER_HOME/.local/share/icons/hicolor/scalable/apps/nitrosense-tray-warning.svg" \
+          "$USER_HOME/.local/share/icons/hicolor/scalable/apps/nitrosense-tray-critical.svg"
+    rm -f "$USER_HOME"/.local/share/icons/hicolor/*/apps/io.github.napejoon.NitroSense.png
+fi
 rm -f /usr/share/applications/nitrosense.desktop /usr/local/bin/nitrosense
 rm -f /usr/share/applications/io.github.napejoon.NitroSense.desktop
 rm -f /usr/share/icons/hicolor/256x256/apps/nitrosense.png
@@ -49,4 +66,8 @@ gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
 update-desktop-database -q /usr/share/applications 2>/dev/null || true
 rm -rf /opt/nitrosense /usr/share/nitrosense /var/lib/nitrosense /etc/nitrosense
 systemctl daemon-reload
-echo "NitroSense for Linux removed (acpi-call-dkms left installed: sudo apt remove acpi-call-dkms)."
+if command -v apt-get >/dev/null 2>&1; then
+    echo "NitroSense for Linux removed (acpi-call-dkms left installed: sudo apt remove acpi-call-dkms)."
+else
+    echo "NitroSense for Linux removed (acpi_call stays loaded until the next reboot)."
+fi

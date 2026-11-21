@@ -27,20 +27,79 @@ if [ "$VENDOR" != "Acer" ]; then
     exit 1
 fi
 
-echo "==> Installing dependencies"
-apt-get install -y python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-4.0 acpi-call-dkms
-# optional: the tray icon of the alert watcher (without them the watcher still notifies)
-apt-get install -y gir1.2-gtk-3.0 gir1.2-xapp-1.0 || echo "    tray icon libraries not installed (optional)"
-# optional: SMART for SATA/HDD disks (NVMe is read natively and needs nothing)
-apt-get install -y smartmontools || echo "    smartmontools not installed (optional: SATA/HDD health)"
-
-echo "==> Loading acpi_call (signed by DKMS with your enrolled MOK key)"
-if ! modprobe acpi_call; then
-    echo "acpi_call could not be loaded. With Secure Boot on, the DKMS module must be" >&2
-    echo "signed with an enrolled MOK key (see README)." >&2
-    exit 1
+# Image-based systems (Bluefin, Bazzite, Aurora, GNOME OS, ...) have a read-only /usr and no
+# apt: the menu entry, icons and command go to the user's ~/.local, and acpi_call comes from
+# tools/build-acpi_call.sh instead of DKMS. /opt, /etc and /var stay writable there.
+IMMUTABLE=0
+if [ ! -w /usr/share ] || ! command -v apt-get >/dev/null 2>&1; then
+    IMMUTABLE=1
+    echo "==> Image-based system (read-only /usr or no apt): per-user menu entry and icons"
 fi
-echo acpi_call > /etc/modules-load.d/nitrosense.conf
+USER_HOME=""
+if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ]; then
+    USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+fi
+if [ "$IMMUTABLE" -eq 1 ]; then
+    if [ -z "$USER_HOME" ]; then
+        echo "Run with sudo from your user account (the menu entry goes to your home)." >&2
+        exit 1
+    fi
+    APPS_DIR="$USER_HOME/.local/share/applications"
+    ICON_THEME="$USER_HOME/.local/share/icons/hicolor"
+    BIN_LINK="$USER_HOME/.local/bin/nitrosense"
+    ASSETS_DIR=/opt/nitrosense/share/assets
+else
+    APPS_DIR=/usr/share/applications
+    ICON_THEME=/usr/share/icons/hicolor
+    BIN_LINK=/usr/local/bin/nitrosense
+    ASSETS_DIR=/usr/share/nitrosense/assets
+fi
+
+if [ "$IMMUTABLE" -eq 0 ]; then
+    echo "==> Installing dependencies"
+    apt-get install -y python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-4.0 acpi-call-dkms
+    # optional: the tray icon of the alert watcher (without them the watcher still notifies)
+    apt-get install -y gir1.2-gtk-3.0 gir1.2-xapp-1.0 || echo "    tray icon libraries not installed (optional)"
+    # optional: SMART for SATA/HDD disks (NVMe is read natively and needs nothing)
+    apt-get install -y smartmontools || echo "    smartmontools not installed (optional: SATA/HDD health)"
+else
+    echo "==> Checking dependencies (no package manager: they must come with the image)"
+    if ! python3 -I -c 'import gi, cairo; gi.require_version("Gtk", "4.0"); from gi.repository import Gtk; assert (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 10)' 2>/dev/null; then
+        echo "The system python3 lacks PyGObject, pycairo or GTK 4.10+; NitroSense cannot run here." >&2
+        exit 1
+    fi
+    python3 -I -c 'import gi; gi.require_version("XApp", "1.0")' 2>/dev/null \
+        || echo "    XApp not available: no tray icon (the watcher still sends notifications)"
+    command -v smartctl >/dev/null 2>&1 \
+        || echo "    smartctl not in root's PATH: SATA/HDD health unavailable (NVMe is read natively)"
+fi
+
+if [ "$IMMUTABLE" -eq 0 ]; then
+    echo "==> Loading acpi_call (signed by DKMS with your enrolled MOK key)"
+    if ! modprobe acpi_call; then
+        echo "acpi_call could not be loaded. With Secure Boot on, the DKMS module must be" >&2
+        echo "signed with an enrolled MOK key (see README)." >&2
+        exit 1
+    fi
+    echo acpi_call > /etc/modules-load.d/nitrosense.conf
+else
+    echo "==> Loading acpi_call (built by tools/build-acpi_call.sh)"
+    install -m 0644 "$SRC/data/nitrosense-acpi-call.service" /etc/systemd/system/nitrosense-acpi-call.service
+    systemctl daemon-reload
+    # the file must exist even if acpi_call is already loaded, or it would be gone after a reboot
+    if [ ! -f "/var/lib/nitrosense-kmod/$(uname -r)/acpi_call.ko" ]; then
+        echo "No acpi_call module for kernel $(uname -r). As your user (not root), run:" >&2
+        echo "    $SRC/tools/build-acpi_call.sh" >&2
+        echo "then run this installer again." >&2
+        exit 1
+    fi
+    systemctl enable nitrosense-acpi-call.service
+    systemctl start nitrosense-acpi-call.service
+    if [ ! -e /proc/acpi/call ]; then
+        echo "acpi_call could not be loaded; see: journalctl -u nitrosense-acpi-call" >&2
+        exit 1
+    fi
+fi
 
 echo "==> Read-only hardware probe (getters only)"
 if ! python3 -I "$SRC/tools/probe.py"; then
@@ -54,15 +113,17 @@ install -d /opt/nitrosense/bin
 cp -r "$SRC/nitrosense" /opt/nitrosense/
 find /opt/nitrosense -name '__pycache__' -prune -exec rm -rf {} +
 install -m 0755 "$SRC/bin/nitrosense" "$SRC/bin/nitrosensed" "$SRC/bin/nitrosense-watch" /opt/nitrosense/bin/
+# kept installed so the module can be rebuilt after a kernel update without the source tree
+install -D -m 0755 "$SRC/tools/build-acpi_call.sh" /opt/nitrosense/tools/build-acpi_call.sh
 chown -R root:root /opt/nitrosense
 chmod -R go-w /opt/nitrosense
 
-rm -rf /usr/share/nitrosense/assets
-install -d /usr/share/nitrosense/assets
+rm -rf "$ASSETS_DIR"
+install -d "$ASSETS_DIR"
 if [ -n "$PKG" ]; then
     echo "==> Extracting NitroSense artwork from the Windows package"
     (cd /opt/nitrosense && python3 -I -c 'import sys; sys.path.insert(0, "."); from nitrosense.extract import main; sys.exit(main(["x", sys.argv[1], sys.argv[2]]))' \
-        "$PKG" /usr/share/nitrosense/assets) \
+        "$PKG" "$ASSETS_DIR") \
         || echo "    WARNING: could not extract artwork (is this the 3.x package?); continuing without it"
 else
     echo "==> No Windows package given: running without the original artwork"
@@ -87,26 +148,38 @@ if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ]; then
 fi
 
 echo "==> Icon and menu entry"
-rm -f /usr/share/applications/nitrosense.desktop \
-      /usr/share/icons/hicolor/256x256/apps/nitrosense.png   # names used by older versions
+if [ "$IMMUTABLE" -eq 1 ]; then
+    # create the per-user directories as the user, so none of them ends up owned by root
+    runuser -u "$USER_NAME" -- mkdir -p "$ICON_THEME" "$APPS_DIR" "$(dirname "$BIN_LINK")"
+else
+    rm -f /usr/share/applications/nitrosense.desktop \
+          /usr/share/icons/hicolor/256x256/apps/nitrosense.png   # names used by older versions
+fi
 # The icon is NitroSense's own keycap tile from your package, with the N lit red like the
 # backlit NitroSense key; without a tile, the project's own SVG icon is used.
-ICON_TILE=/usr/share/nitrosense/assets/icon.png
+ICON_TILE="$ASSETS_DIR/icon.png"
 if [ -f "$ICON_TILE" ] && (cd /opt/nitrosense && python3 -I -c 'import sys; sys.path.insert(0, "."); from nitrosense.iconmaker import main; sys.exit(main(sys.argv[1:]))' \
-        "$ICON_TILE" /usr/share/icons/hicolor); then
-    rm -f /usr/share/icons/hicolor/scalable/apps/io.github.napejoon.NitroSense.svg
+        "$ICON_TILE" "$ICON_THEME"); then
+    rm -f "$ICON_THEME/scalable/apps/io.github.napejoon.NitroSense.svg"
 else
     install -D -m 0644 "$SRC/data/icons/io.github.napejoon.NitroSense.svg" \
-        /usr/share/icons/hicolor/scalable/apps/io.github.napejoon.NitroSense.svg
+        "$ICON_THEME/scalable/apps/io.github.napejoon.NitroSense.svg"
 fi
 for t in nitrosense-tray nitrosense-tray-warning nitrosense-tray-critical; do
-    install -D -m 0644 "$SRC/data/icons/$t.svg" "/usr/share/icons/hicolor/scalable/apps/$t.svg"
+    install -D -m 0644 "$SRC/data/icons/$t.svg" "$ICON_THEME/scalable/apps/$t.svg"
 done
-gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+gtk-update-icon-cache -q -t -f "$ICON_THEME" 2>/dev/null || true
 install -D -m 0644 "$SRC/data/io.github.napejoon.NitroSense.desktop" \
-    /usr/share/applications/io.github.napejoon.NitroSense.desktop
-update-desktop-database -q /usr/share/applications 2>/dev/null || true
-ln -sf /opt/nitrosense/bin/nitrosense /usr/local/bin/nitrosense
+    "$APPS_DIR/io.github.napejoon.NitroSense.desktop"
+update-desktop-database -q "$APPS_DIR" 2>/dev/null || true
+install -d "$(dirname "$BIN_LINK")"
+ln -sf /opt/nitrosense/bin/nitrosense "$BIN_LINK"
+if [ "$IMMUTABLE" -eq 1 ]; then
+    # files created by root inside the user's home: hand them back
+    chown -R "$USER_NAME:" "$ICON_THEME" "$APPS_DIR/io.github.napejoon.NitroSense.desktop"
+    if [ -f "$APPS_DIR/mimeinfo.cache" ]; then chown "$USER_NAME:" "$APPS_DIR/mimeinfo.cache"; fi
+    chown -h "$USER_NAME:" "$BIN_LINK"
+fi
 
 echo "==> Background alert watcher (notifications even with the window closed)"
 # Starts with the desktop session. To turn it off for one user, copy this file to

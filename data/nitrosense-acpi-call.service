@@ -1,0 +1,15 @@
+[Unit]
+Description=Load acpi_call built by NitroSense for the running kernel (image-based systems)
+Documentation=file:///opt/nitrosense/tools/build-acpi_call.sh
+Before=nitrosensed.service
+# %v is the running kernel release; tools/build-acpi_call.sh installs one module per kernel.
+ConditionPathExists=/var/lib/nitrosense-kmod/%v/acpi_call.ko
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'grep -q "^acpi_call " /proc/modules || insmod /var/lib/nitrosense-kmod/%v/acpi_call.ko'
+ExecStop=-/bin/sh -c 'grep -q "^acpi_call " /proc/modules && rmmod acpi_call'
+
+[Install]
+WantedBy=multi-user.target
