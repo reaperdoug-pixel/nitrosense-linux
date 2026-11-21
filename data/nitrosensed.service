@@ -5,7 +5,7 @@ Wants=systemd-modules-load.service nitrosense-acpi-call.service
 
 [Service]
 Type=simple
-ExecStartPre=-/sbin/modprobe acpi_call
+ExecStartPre=-/sbin/modprobe -q acpi_call
 ExecStart=/opt/nitrosense/bin/nitrosensed
 Restart=on-failure
 RestartSec=3
