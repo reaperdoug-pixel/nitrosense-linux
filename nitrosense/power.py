@@ -78,9 +78,26 @@ def _ppd_profiles() -> set[str]:
     return profiles
 
 
+def _scaling_driver() -> str:
+    try:
+        with open("/sys/devices/system/cpu/cpufreq/policy0/scaling_driver") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+# Drivers with an energy/performance preference that power-profiles-daemon sets itself.
+# Their "performance" governor locks that preference (writes fail with EBUSY), which makes
+# ppd abort the whole profile switch, firmware platform_profile included.
+_EPP_DRIVERS = ("intel_pstate", "amd-pstate-epp")
+
+
 def apply_plan(plan: str) -> None:
     governor, boost, ppd = _PLAN_SETTINGS[plan]
     govs = _available_governors()
+    profiles = _ppd_profiles()
+    if profiles and _scaling_driver() in _EPP_DRIVERS:
+        governor = "powersave"  # ppd drives the plan through EPP and platform_profile
     if governor not in govs and "schedutil" in govs:
         governor = "schedutil"
     for pol in glob.glob("/sys/devices/system/cpu/cpufreq/policy*"):
@@ -91,7 +108,6 @@ def apply_plan(plan: str) -> None:
     if os.path.exists("/sys/devices/system/cpu/cpufreq/boost"):
         _write("/sys/devices/system/cpu/cpufreq/boost", "1" if boost else "0")
 
-    profiles = _ppd_profiles()
     if profiles:
         if ppd not in profiles:
             ppd = "balanced"
