@@ -36,12 +36,19 @@ if [ "$VENDOR" != "Acer" ]; then
 fi
 
 # Image-based systems (Bluefin, Bazzite, Aurora, GNOME OS, ...) have a read-only /usr and no
-# apt: the menu entry, icons and command go to the user's ~/.local, and acpi_call comes from
-# tools/build-acpi_call.sh instead of DKMS. /opt, /etc and /var stay writable there.
+# package manager: the menu entry, icons and command go to the user's ~/.local, and acpi_call
+# comes from tools/build-acpi_call.sh instead of DKMS. /opt, /etc and /var stay writable there.
+# Arch-based systems (Arch, Omarchy, ...) use pacman and DKMS like Debian uses apt.
+PKG_MGR=""
+if command -v apt-get >/dev/null 2>&1; then
+    PKG_MGR=apt
+elif command -v pacman >/dev/null 2>&1; then
+    PKG_MGR=pacman
+fi
 IMMUTABLE=0
-if [ ! -w /usr/share ] || ! command -v apt-get >/dev/null 2>&1; then
+if [ ! -w /usr/share ] || [ -z "$PKG_MGR" ]; then
     IMMUTABLE=1
-    echo "==> Image-based system (read-only /usr or no apt): per-user menu entry and icons"
+    echo "==> Image-based system (read-only /usr or no apt/pacman): per-user menu entry and icons"
 fi
 USER_HOME=""
 if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ]; then
@@ -65,11 +72,19 @@ fi
 
 if [ "$IMMUTABLE" -eq 0 ]; then
     echo "==> Installing dependencies"
-    apt-get install -y python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-4.0 acpi-call-dkms
-    # optional: the tray icon of the alert watcher (without them the watcher still notifies)
-    apt-get install -y gir1.2-gtk-3.0 gir1.2-xapp-1.0 || echo "    tray icon libraries not installed (optional)"
-    # optional: SMART for SATA/HDD disks (NVMe is read natively and needs nothing)
-    apt-get install -y smartmontools || echo "    smartmontools not installed (optional: SATA/HDD health)"
+    if [ "$PKG_MGR" = apt ]; then
+        apt-get install -y python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-4.0 acpi-call-dkms
+        # optional: the tray icon of the alert watcher (without them the watcher still notifies)
+        apt-get install -y gir1.2-gtk-3.0 gir1.2-xapp-1.0 || echo "    tray icon libraries not installed (optional)"
+        # optional: SMART for SATA/HDD disks (NVMe is read natively and needs nothing)
+        apt-get install -y smartmontools || echo "    smartmontools not installed (optional: SATA/HDD health)"
+    else
+        # acpi_call is built by DKMS against the headers of the running kernel, which must be
+        # installed (linux-headers on Arch, linux-omarchy-headers on Omarchy).
+        pacman -S --needed --noconfirm python-gobject python-cairo gtk4 dkms acpi_call-dkms
+        pacman -S --needed --noconfirm gtk3 xapp || echo "    tray icon libraries not installed (optional)"
+        pacman -S --needed --noconfirm smartmontools || echo "    smartmontools not installed (optional: SATA/HDD health)"
+    fi
 else
     echo "==> Checking dependencies (no package manager: they must come with the image)"
     if ! python3 -I -c 'import gi, cairo; gi.require_version("Gtk", "4.0"); from gi.repository import Gtk; assert (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 10)' 2>/dev/null; then

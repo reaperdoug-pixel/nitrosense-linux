@@ -78,6 +78,8 @@ rm -rf /opt/nitrosense /usr/share/nitrosense /var/lib/nitrosense /etc/nitrosense
 systemctl daemon-reload
 if command -v apt-get >/dev/null 2>&1; then
     echo "NitroSense for Linux removed (acpi-call-dkms left installed: sudo apt remove acpi-call-dkms)."
+elif command -v pacman >/dev/null 2>&1; then
+    echo "NitroSense for Linux removed (acpi_call-dkms left installed: sudo pacman -R acpi_call-dkms)."
 else
     echo "NitroSense for Linux removed (acpi_call stays loaded until the next reboot)."
 fi

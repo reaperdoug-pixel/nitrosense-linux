@@ -12,8 +12,8 @@ This is a fork of [napejoon/nitrosense-linux](https://github.com/napejoon/nitros
 port of Acer NitroSense 3.01 for Windows. The fork keeps the part that makes it work, a root
 service that talks to the Acer firmware with the same WMI commands Windows NitroSense sends,
 and replaces the Windows-style window with a new dashboard. It was developed on an **Acer Nitro
-ANV15-51** (Intel + GeForce RTX 3050) running Linux Mint 22.
-The interface is in **Brazilian Portuguese**.
+ANV15-51** (Intel + GeForce RTX 3050) running Linux Mint 22, and later brought to **Omarchy** (Arch-based) as well, without
+dropping Mint support. The interface is in **Brazilian Portuguese**.
 
 > 🇧🇷 [Português (idioma principal)](../README.md) · 🇹🇭 [คู่มือภาษาไทย](README.th.md) (upstream's, for the original window)
 
@@ -76,6 +76,7 @@ Behind the window:
 | Status | Models |
 |---|---|
 | ✅ Developed and tested | **Acer Nitro ANV15-51** (Intel, GeForce RTX 3050 6 GB), Linux Mint 22.3, kernel 7.0 |
+| ✅ Tested on Omarchy | **Acer Nitro ANV15-51**, Omarchy (Arch-based, Hyprland), kernel 7.2 `linux-omarchy` |
 | ✅ Tested by the upstream project | **Acer Nitro AN515-44** (Ryzen 4000 + GTX 1650 Ti, BIOS V1.04), Ubuntu 24.04 |
 | 🟡 Should work (same WMI interface, `MachineType=1`), untested | AN515-43, AN515-45, AN515-51s, AN515-54, AN515-55, AN515-56, AN515-57, AN517-41, AN517-51, AN517-52, AN517-53, AN517-54, AN715-41, AN715-51, AN715-52, N9500-A, T9300 |
 | ❌ Not supported (different NitroSense) | `MachineType=2` models with operation modes (AN515-46/47/58, AN517-42/43/55, Nitro ANX), and older `MachineType=0` models |
@@ -104,6 +105,11 @@ check that the temperatures and RPM it prints look right.
 
 ## Requirements
 
+There are two install flavours: **Linux Mint / Ubuntu** (Debian-based, the original one) and
+**Omarchy** (Arch-based). The program is the same; only the packages and a few desktop details differ.
+
+### Linux Mint / Ubuntu (Debian-based)
+
 - An Acer Nitro laptop (see above) running **Linux Mint 22 / Ubuntu 24.04** or another
   Debian-based distribution with **GTK 4.10+** and Python 3.10+.
 - Installed automatically: `python3-gi`, `python3-gi-cairo`, `python3-cairo`,
@@ -120,6 +126,18 @@ check that the temperatures and RPM it prints look right.
 - Optional: the **NitroSense package for Windows** of your model. It is only used for the
   per-model `.ini` files of models not bundled here and for the app icon; the dashboard itself
   uses no Acer artwork.
+
+### Omarchy (Arch-based)
+
+- An Acer Nitro laptop running **Omarchy** (or another Arch-based distribution with `pacman`).
+- The **headers of the running kernel**, so DKMS can build `acpi_call`. On Omarchy that is
+  `linux-omarchy-headers` (installed by default); on plain Arch, `linux-headers`.
+- Installed automatically through `pacman`: `python-gobject`, `python-cairo`, `gtk4`, `dkms`,
+  `acpi_call-dkms`.
+- Optional (the installer tries to install them): `smartmontools`, `gtk3` and `xapp`.
+- **Secure Boot**: with it off (as on the test laptop), there is no MOK key to enroll. With it on,
+  you have to sign the `acpi_call` module yourself.
+- Everything else (NVIDIA driver, NitroSense package for Windows) works as in the Mint flavour.
 
 ---
 
@@ -206,6 +224,31 @@ again: until then the service reports that `acpi_call` is not loaded and the das
 sensors and no fan control.
 
 Developed and tested on an ANV15-51 with Bluefin (`dakota-nvidia` image, kernel 7.2.6).
+
+### Installing on Omarchy (Arch-based)
+
+The same `install.sh` works on Omarchy: it detects `pacman` and installs the Arch packages instead
+of the Debian ones. The `.deb` package does not apply here.
+
+```bash
+git clone https://github.com/reaperdoug-pixel/nitrosense-linux.git
+cd nitrosense-linux
+sudo ./install.sh
+```
+
+Run it in a real terminal (`Super + Enter`), since `sudo` has to ask for the password. Differences
+from Mint:
+
+- **NitroSense key**: the installer can only register the shortcut on GNOME and Cinnamon, so on
+  Hyprland it warns that it could not. Add the line below to `~/.config/hypr/bindings.lua`
+  (Hyprland reloads on its own):
+
+  ```lua
+  o.bind("XF86Launch1", "NitroSense", { launch = "nitrosense" })
+  ```
+
+- **Alert watcher**: starts from `/etc/xdg/autostart`, which Omarchy runs at login (through `uwsm`).
+- **Tray icon**: untested on the Omarchy bar; notifications work either way.
 
 ---
 
@@ -309,7 +352,8 @@ The key with the NitroSense logo sends AT scancode `0xf5`, which systemd maps to
 `KEY_PRESENTATION` (keycode 425). X11 cannot deliver keycodes above 247, so the desktop never sees
 it. The installer therefore adds `/etc/udev/hwdb.d/61-nitrosense.hwdb`, which remaps it to
 `prog1` (`XF86Launch1`), and registers a GNOME or Cinnamon (Linux Mint) custom shortcut *NitroSense*: `XF86Launch1` →
-`/opt/nitrosense/bin/nitrosense`. On other desktops, bind `XF86Launch1` to that command yourself.
+`/opt/nitrosense/bin/nitrosense`. On other desktops, bind `XF86Launch1` to that command yourself
+(on Omarchy/Hyprland, see [Installing on Omarchy](#installing-on-omarchy-arch-based)).
 To check what any key sends: `sudo python3 -I tools/keyprobe.py 20` and press it. To re-register
 the GNOME shortcut as your user: `cd /opt/nitrosense && python3 -m nitrosense.shortcut install`
 (or `remove` / `status`).
